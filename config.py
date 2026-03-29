@@ -12,7 +12,7 @@ ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets
 FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL", "")
 
 # ── Hugging Face ─────────────────────────────────────────────────────────
-HF_TOKEN = os.getenv("HF_TOKEN", "")
+HF_TOKEN       = os.getenv("HF_TOKEN", "")
 HF_DATASET_REPO = os.getenv("HF_DATASET_REPO", "")
 
 # ── Market-specific watchlists ────────────────────────────────────────────

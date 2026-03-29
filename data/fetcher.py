@@ -85,6 +85,14 @@ def _fetch_akshare(symbol: str, start: str, end: str) -> pd.DataFrame:
 # Public API
 # ════════════════════════════════════════════════════════════════════════
 
+def _hf_data_is_fresh(df: pd.DataFrame, max_lag_days: int = 3) -> bool:
+    """Return True if the HF-cached DataFrame has data within max_lag_days of today."""
+    if df is None or df.empty:
+        return False
+    last_date = df.index[-1]
+    return (datetime.today() - last_date).days <= max_lag_days
+
+
 def fetch_history(
     symbol: str,
     years: int = 10,
@@ -107,12 +115,24 @@ def fetch_history(
         logger.debug("Cache hit: %s", cache_key)
         return _cache[cache_key]
 
+    # ── Try HF Dataset first ──────────────────────────────────────────
+    import os
+    hf_token = os.getenv("HF_TOKEN", "")
+    hf_repo  = os.getenv("HF_DATASET_REPO", "")
+    if not force_refresh and hf_token and hf_repo:
+        cached = load_from_hf(symbol, hf_repo, hf_token, market=market)
+        if _hf_data_is_fresh(cached):
+            logger.info("HF Dataset hit: %s [%s]", symbol, market)
+            _cache[cache_key] = cached
+            return cached
+
+    # ── Fallback: fetch from source ───────────────────────────────────
     end_dt = datetime.today()
     start_dt = end_dt - timedelta(days=years * 365 + 5)
     start = start_dt.strftime("%Y-%m-%d")
     end = end_dt.strftime("%Y-%m-%d")
 
-    logger.info("Fetching %s [%s] via %s (%d yr)...", symbol, market, market, years)
+    logger.info("Fetching %s [%s] from source (%d yr)...", symbol, market, years)
 
     if market == "cn":
         df = _fetch_akshare(symbol, start, end)
@@ -286,6 +306,39 @@ def load_from_hf(symbol: str, hf_repo: str, hf_token: str,
     except Exception as e:
         logger.debug("HF load failed %s [%s]: %s", symbol, market, e)
         return None
+
+
+def load_today_signals_from_hf(
+    market: Market = "us",
+    hf_repo: str = "",
+    hf_token: str = "",
+    date: Optional[str] = None,
+) -> dict[str, dict[str, int]]:
+    """
+    Load today's pre-computed signals from HF Dataset.
+    Returns {symbol: {strategy_name: signal_int}} or {} if not found.
+    """
+    date = date or datetime.today().strftime("%Y%m%d")
+    try:
+        from huggingface_hub import hf_hub_download
+        path = hf_hub_download(
+            repo_id=hf_repo,
+            filename=f"signals/{market}/signals_{date}.parquet",
+            repo_type="dataset",
+            token=hf_token,
+        )
+        df = pd.read_parquet(path)
+        # Pivot: {symbol: {strategy: signal}}
+        result: dict[str, dict[str, int]] = {}
+        for _, row in df.iterrows():
+            sym = row["symbol"]
+            strat = row["strategy"]
+            result.setdefault(sym, {})[strat] = int(row["signal"])
+        logger.info("Loaded today's signals [%s] from HF Dataset (%d rows).", market, len(df))
+        return result
+    except Exception as e:
+        logger.debug("No HF signals for today [%s]: %s", market, e)
+        return {}
 
 
 def save_signals_to_hf(signals_df: pd.DataFrame, hf_repo: str, hf_token: str,

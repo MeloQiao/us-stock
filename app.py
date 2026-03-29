@@ -17,11 +17,14 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+import os
+
 from config import (
     ALL_SYMBOLS,
     ALPACA_API_KEY,
     FEISHU_WEBHOOK_URL,
     HF_DATASET_REPO,
+    HF_TOKEN,
     HISTORY_YEARS,
     STRATEGY_PARAMS,
     UI_REFRESH_SECONDS,
@@ -71,10 +74,36 @@ def get_vix() -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def compute_signals(symbol: str) -> dict:
+    """Full signal computation — used by backtest tabs (always fresh)."""
     from strategies.composite import run_all_strategies
     df = get_history(symbol)
     vix_df = get_vix()
     return run_all_strategies(df, symbol=symbol, vix_df=vix_df)
+
+
+@st.cache_data(ttl=300)
+def get_dashboard_signals() -> dict[str, dict[str, int]]:
+    """
+    Load today's pre-computed signals from HF Dataset for the dashboard.
+    Falls back to computing fresh if HF signals not available.
+    Returns {symbol: {strategy: signal_int}}.
+    """
+    from data.fetcher import load_today_signals_from_hf
+    if HF_TOKEN and HF_DATASET_REPO:
+        signals = load_today_signals_from_hf(
+            market="us", hf_repo=HF_DATASET_REPO, hf_token=HF_TOKEN
+        )
+        if signals:
+            return signals
+    # Fallback: compute on-the-fly
+    result = {}
+    for sym in ALL_SYMBOLS:
+        try:
+            r = compute_signals(sym)
+            result[sym] = {k: v["signal"] for k, v in r.items()}
+        except Exception:
+            pass
+    return result
 
 
 def signal_badge(signal: int) -> str:
@@ -122,23 +151,29 @@ with tab1:
     with col_time:
         st.caption(f"最后更新: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ·  自动 {UI_REFRESH_SECONDS}s 刷新")
 
-    # Quotes table
-    with st.spinner("拉取行情..."):
+    # Load signals + quotes in parallel
+    with st.spinner("加载信号和行情..."):
+        dashboard_signals = get_dashboard_signals()
         quotes = get_quotes(ALL_SYMBOLS)
+
+    signal_source = "HF Dataset ✅" if (HF_TOKEN and HF_DATASET_REPO and dashboard_signals) else "实时计算"
+    st.caption(f"信号来源: {signal_source}")
 
     quotes_df = pd.DataFrame(quotes)
     if not quotes_df.empty and "price" in quotes_df.columns:
         quotes_df = quotes_df[quotes_df["price"].notna()]
 
-        # Compute composite signals for display
         signal_col = []
         score_col = []
         for sym in quotes_df["symbol"]:
             try:
-                results = compute_signals(sym)
-                comp = results.get("composite_score", {})
-                signal_col.append(signal_badge(comp.get("signal", 0)))
-                score_col.append(f"{comp.get('total_score', 0)}/{comp.get('max_possible', 9)}")
+                sym_signals = dashboard_signals.get(sym, {})
+                comp_signal = sym_signals.get("composite_score", 0)
+                # score = count of bullish signals
+                total = sum(v for v in sym_signals.values() if v == 1) - sum(1 for v in sym_signals.values() if v == -1)
+                max_s = len(sym_signals) - 1  # exclude composite itself
+                signal_col.append(signal_badge(comp_signal))
+                score_col.append(f"{total}/{max_s}" if max_s else "—")
             except Exception:
                 signal_col.append("—")
                 score_col.append("—")
@@ -169,18 +204,15 @@ with tab1:
 
     # Signal heatmap: symbol × strategy
     st.subheader("信号矩阵")
-    with st.spinner("计算策略信号..."):
-        matrix_data = {}
-        for sym in ALL_SYMBOLS:
-            try:
-                results = compute_signals(sym)
-                matrix_data[sym] = {
-                    STRATEGY_LABELS.get(k, k): v["signal"]
-                    for k, v in results.items()
-                    if k != "composite_score"
-                }
-            except Exception:
-                pass
+    matrix_data = {}
+    for sym in ALL_SYMBOLS:
+        sym_signals = dashboard_signals.get(sym, {})
+        if sym_signals:
+            matrix_data[sym] = {
+                STRATEGY_LABELS.get(k, k): v
+                for k, v in sym_signals.items()
+                if k != "composite_score"
+            }
 
     if matrix_data:
         matrix_df = pd.DataFrame(matrix_data).T
@@ -440,12 +472,13 @@ with tab5:
             with st.spinner("运行中，约需30秒..."):
                 try:
                     from scheduler.jobs import run_daily_pipeline
-                    result = run_daily_pipeline()
+                    result = run_daily_pipeline("us")
                     st.success(f"完成！处理 {len(result['symbols'])} 个标的，{len(result['errors'])} 个错误")
                     if result["errors"]:
                         for err in result["errors"]:
                             st.warning(err)
                     st.json(result["symbols"])
+                    st.cache_data.clear()
                 except Exception as e:
                     st.error(f"流水线失败: {e}")
 
@@ -462,14 +495,4 @@ with tab5:
     st.subheader("关注标的")
     st.write("**ETF:**", ", ".join(WATCHLIST["etf"]))
     st.write("**个股:**", ", ".join(WATCHLIST["stocks"]))
-
-    # Scheduler status
-    if not st.session_state.scheduler_started:
-        try:
-            from scheduler.jobs import start_scheduler
-            start_scheduler()
-            st.session_state.scheduler_started = True
-        except Exception as e:
-            logger.warning("Scheduler start failed: %s", e)
-
-    st.caption("调度器状态: " + ("✅ 运行中" if st.session_state.scheduler_started else "⚠️ 未启动"))
+    st.caption("⏱ 每日流水线由 GitHub Actions 在 21:30 UTC 自动触发")
