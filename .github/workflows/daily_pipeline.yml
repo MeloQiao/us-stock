@@ -1,0 +1,41 @@
+name: Daily Signal Pipeline
+
+on:
+  schedule:
+    # 21:30 UTC = 16:30 ET (冬令时 EST) / 17:30 ET (夏令时 EDT)
+    # 美股收盘后，data 已经 settled，策略信号准确
+    - cron: '30 21 * * 1-5'
+  workflow_dispatch:  # 允许手动触发，方便测试
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run US market pipeline
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          python -c "
+          import json
+          from scheduler.jobs import run_daily_pipeline
+          result = run_daily_pipeline('us')
+          print(json.dumps(result, indent=2, default=str))
+          if result['errors']:
+              print('ERRORS:', result['errors'])
+              exit(1)
+          "
