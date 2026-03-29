@@ -31,7 +31,7 @@ def _build_signal_card(
         "template": "blue",
         "title": {
             "tag": "plain_text",
-            "content": f"📊 美股策略信号 · {date}",
+            "content": f"📊 US Stock 策略信号 · {date}",
         },
     }
 
@@ -92,7 +92,7 @@ def _build_signal_card(
         "tag": "note",
         "elements": [{
             "tag": "plain_text",
-            "content": "信号基于收盘价计算 · 次日开盘执行 · 仅供参考，不构成投资建议",
+            "content": "US Stock Monitor · 信号基于收盘价计算 · 次日开盘执行 · 仅供参考，不构成投资建议",
         }],
     })
 
@@ -151,6 +151,9 @@ def send_text_message(webhook_url: str, text: str) -> bool:
     if not webhook_url:
         return False
     try:
+        # Ensure keyword filter is satisfied
+        if "Stock" not in text and "Hugging Face" not in text:
+            text = f"[US Stock Monitor] {text}"
         payload = {"msg_type": "text", "content": {"text": text}}
         resp = httpx.post(webhook_url, json=payload, timeout=10)
         resp.raise_for_status()
