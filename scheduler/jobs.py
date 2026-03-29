@@ -1,60 +1,92 @@
 """
-Scheduled jobs using APScheduler.
-Runs daily after US market close (16:30 ET):
-  1. Fetch latest OHLCV data for all symbols
-  2. Compute all strategy signals
-  3. Execute paper trades via Alpaca
-  4. Send Feishu alert with today's signals
-  5. Persist data to HF Dataset
+Scheduled jobs — one pipeline per market, each firing at that market's close time.
+
+Market   Close time  Timezone
+───────  ──────────  ────────────────────
+us       16:30       America/New_York
+hk       16:00       Asia/Hong_Kong
+cn       15:00       Asia/Shanghai
+
+Only markets listed in config.ACTIVE_MARKETS get a scheduled job.
+US paper trading (Alpaca) is only wired up for the "us" pipeline.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime
+from typing import Literal
 
 import pytz
 
 from config import (
-    ALL_SYMBOLS,
+    ACTIVE_MARKETS,
+    MARKET_WATCHLISTS,
+    MARKET_SCHEDULE,
     HISTORY_YEARS,
     FEISHU_WEBHOOK_URL,
     HF_TOKEN,
     HF_DATASET_REPO,
-    DAILY_JOB_HOUR,
-    DAILY_JOB_MINUTE,
-    TIMEZONE,
     ALPACA_API_KEY,
 )
 
 logger = logging.getLogger(__name__)
 
+Market = Literal["us", "hk", "cn"]
 
-def run_daily_pipeline() -> dict:
-    """
-    Full daily pipeline: fetch → signal → trade → alert → persist.
-    Returns summary dict of results.
-    """
-    logger.info("=== Daily pipeline started at %s ===", datetime.now().isoformat())
-    summary = {"date": datetime.today().strftime("%Y-%m-%d"), "symbols": {}, "errors": []}
 
-    # 1. Fetch data
+# ════════════════════════════════════════════════════════════════════════
+# Core pipeline (market-agnostic)
+# ════════════════════════════════════════════════════════════════════════
+
+def run_daily_pipeline(market: Market = "us") -> dict:
+    """
+    Full daily pipeline for one market:
+      1. Fetch OHLCV data
+      2. Compute all strategy signals
+      3. [us only] Execute Alpaca paper trades
+      4. Send Feishu alert
+      5. Persist to HF Dataset
+
+    Returns a summary dict.
+    """
+    logger.info("=== Pipeline [%s] started at %s ===", market, datetime.now().isoformat())
+    summary: dict = {
+        "market": market,
+        "date": datetime.today().strftime("%Y-%m-%d"),
+        "symbols": {},
+        "errors": [],
+    }
+
+    watchlist = MARKET_WATCHLISTS.get(market, {})
+    symbols = [s for group in watchlist.values() for s in group]
+
+    if not symbols:
+        logger.info("No symbols configured for market [%s], skipping.", market)
+        summary["errors"].append(f"No symbols for market: {market}")
+        return summary
+
+    # ── 1. Fetch data ─────────────────────────────────────────────────
     from data.fetcher import fetch_multiple, save_to_hf, save_signals_to_hf
     import pandas as pd
 
-    logger.info("Fetching data for %d symbols...", len(ALL_SYMBOLS))
-    data = fetch_multiple(ALL_SYMBOLS, years=HISTORY_YEARS, force_refresh=True)
-    vix_data = fetch_multiple(["^VIX"], years=HISTORY_YEARS, force_refresh=True)
-    vix_df = vix_data.get("^VIX")
+    logger.info("Fetching %d symbols for [%s]...", len(symbols), market)
+    data = fetch_multiple(symbols, years=HISTORY_YEARS, market=market, force_refresh=True)
 
-    # 2. Compute signals for each symbol
+    # VIX is only relevant for US market
+    vix_df = None
+    if market == "us":
+        vix_data = fetch_multiple(["^VIX"], years=HISTORY_YEARS, market="us", force_refresh=True)
+        vix_df = vix_data.get("^VIX")
+
+    # ── 2. Strategy signals ───────────────────────────────────────────
     from strategies.composite import run_all_strategies
     from strategies import STRATEGY_LABELS
 
     all_results: dict[str, dict] = {}
     composite_signals: dict[str, int] = {}
 
-    for symbol in ALL_SYMBOLS:
+    for symbol in symbols:
         if symbol not in data:
             summary["errors"].append(f"No data for {symbol}")
             continue
@@ -66,25 +98,23 @@ def run_daily_pipeline() -> dict:
                 "composite_signal": composite_signals[symbol],
                 "total_score": results["composite_score"].get("total_score", 0),
             }
-            logger.info("%s → composite signal: %d", symbol, composite_signals[symbol])
+            logger.info("[%s] %s → signal: %d", market, symbol, composite_signals[symbol])
         except Exception as e:
-            logger.error("Strategy error for %s: %s", symbol, e)
-            summary["errors"].append(f"Strategy failed: {symbol}: {e}")
+            logger.error("[%s] Strategy error for %s: %s", market, symbol, e)
+            summary["errors"].append(f"Strategy failed {symbol}: {e}")
 
-    # 3. Paper trade execution (only if Alpaca configured)
-    if ALPACA_API_KEY:
+    # ── 3. Paper trade (US only, Alpaca) ──────────────────────────────
+    if market == "us" and ALPACA_API_KEY:
         try:
             from paper_trade.alpaca_trader import execute_signals
             trade_results = execute_signals(composite_signals)
             summary["trades"] = trade_results
-            logger.info("Paper trades executed: %d orders", len(trade_results))
+            logger.info("[us] Paper trades: %d orders", len(trade_results))
         except Exception as e:
-            logger.error("Paper trade execution failed: %s", e)
+            logger.error("[us] Paper trade failed: %s", e)
             summary["errors"].append(f"Paper trade failed: {e}")
-    else:
-        logger.info("Alpaca not configured, skipping paper trade.")
 
-    # 4. Feishu alert
+    # ── 4. Feishu alert ───────────────────────────────────────────────
     if FEISHU_WEBHOOK_URL and all_results:
         try:
             from alerts.feishu import send_signal_alert, build_signal_list
@@ -93,64 +123,90 @@ def run_daily_pipeline() -> dict:
                 vix_value = float(vix_df["Close"].iloc[-1])
 
             signal_list = build_signal_list(all_results, STRATEGY_LABELS)
-            success = send_signal_alert(FEISHU_WEBHOOK_URL, signal_list, vix_value=vix_value)
-            summary["feishu_sent"] = success
+            ok = send_signal_alert(FEISHU_WEBHOOK_URL, signal_list, vix_value=vix_value)
+            summary["feishu_sent"] = ok
         except Exception as e:
-            logger.error("Feishu alert failed: %s", e)
+            logger.error("[%s] Feishu alert failed: %s", market, e)
             summary["errors"].append(f"Feishu failed: {e}")
 
-    # 5. Persist to HF Dataset
+    # ── 5. HF Dataset persist ─────────────────────────────────────────
     if HF_TOKEN and HF_DATASET_REPO:
         try:
             for symbol, df in data.items():
-                save_to_hf(df, symbol, HF_DATASET_REPO, HF_TOKEN)
+                save_to_hf(df, symbol, HF_DATASET_REPO, HF_TOKEN, market=market)
 
-            # Save signal log
             rows = []
             for symbol, results in all_results.items():
                 for strat_name, result in results.items():
                     rows.append({
                         "date": summary["date"],
+                        "market": market,
                         "symbol": symbol,
                         "strategy": strat_name,
                         "signal": result["signal"],
                     })
             if rows:
-                signals_df = pd.DataFrame(rows)
-                save_signals_to_hf(signals_df, HF_DATASET_REPO, HF_TOKEN)
-            logger.info("Data persisted to HF Dataset.")
+                save_signals_to_hf(pd.DataFrame(rows), HF_DATASET_REPO, HF_TOKEN, market=market)
+            logger.info("[%s] Persisted to HF Dataset.", market)
         except Exception as e:
-            logger.error("HF persist failed: %s", e)
+            logger.error("[%s] HF persist failed: %s", market, e)
             summary["errors"].append(f"HF persist failed: {e}")
 
-    logger.info("=== Daily pipeline complete. Errors: %d ===", len(summary["errors"]))
+    logger.info("=== Pipeline [%s] done. Errors: %d ===", market, len(summary["errors"]))
     return summary
 
 
+# ── Convenience wrappers so APScheduler can call a plain no-arg function ─
+
+def _run_us():
+    return run_daily_pipeline("us")
+
+def _run_hk():
+    return run_daily_pipeline("hk")
+
+def _run_cn():
+    return run_daily_pipeline("cn")
+
+_MARKET_FUNC = {"us": _run_us, "hk": _run_hk, "cn": _run_cn}
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Scheduler
+# ════════════════════════════════════════════════════════════════════════
+
 def start_scheduler():
     """
-    Start APScheduler with the daily pipeline job.
-    Runs at DAILY_JOB_HOUR:DAILY_JOB_MINUTE in TIMEZONE.
-    Non-blocking: runs in background thread.
+    Start APScheduler background scheduler.
+    Registers one cron job per active market, each in its own local timezone.
+    Non-blocking — runs in background thread.
     """
     from apscheduler.schedulers.background import BackgroundScheduler
 
-    scheduler = BackgroundScheduler(timezone=pytz.timezone(TIMEZONE))
-    scheduler.add_job(
-        run_daily_pipeline,
-        trigger="cron",
-        hour=DAILY_JOB_HOUR,
-        minute=DAILY_JOB_MINUTE,
-        id="daily_pipeline",
-        name="Daily signal + trade pipeline",
-        misfire_grace_time=600,  # 10 min grace window
-        replace_existing=True,
-    )
+    # Use UTC as the scheduler's base timezone; individual jobs carry their own tz.
+    scheduler = BackgroundScheduler(timezone=pytz.utc)
+
+    for market in ACTIVE_MARKETS:
+        cfg = MARKET_SCHEDULE[market]
+        tz = pytz.timezone(cfg["timezone"])
+        func = _MARKET_FUNC[market]
+
+        scheduler.add_job(
+            func,
+            trigger="cron",
+            hour=cfg["hour"],
+            minute=cfg["minute"],
+            timezone=tz,
+            id=f"pipeline_{market}",
+            name=f"Daily pipeline [{market}] at {cfg['hour']:02d}:{cfg['minute']:02d} {cfg['timezone']}",
+            misfire_grace_time=600,
+            replace_existing=True,
+        )
+        logger.info(
+            "Registered job: [%s] at %02d:%02d %s",
+            market, cfg["hour"], cfg["minute"], cfg["timezone"],
+        )
+
     scheduler.start()
-    logger.info(
-        "Scheduler started. Daily job at %02d:%02d %s",
-        DAILY_JOB_HOUR,
-        DAILY_JOB_MINUTE,
-        TIMEZONE,
-    )
+    logger.info("Scheduler started with %d active market(s): %s",
+                len(ACTIVE_MARKETS), ACTIVE_MARKETS)
     return scheduler

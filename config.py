@@ -15,12 +15,41 @@ FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL", "")
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 HF_DATASET_REPO = os.getenv("HF_DATASET_REPO", "")
 
-# ── Watchlist ─────────────────────────────────────────────────────────────
-WATCHLIST = {
-    "etf": ["QQQ", "TQQQ", "SQQQ", "SPY", "UVXY"],
-    "stocks": ["NVDA", "TSLA", "AAPL", "META", "MSTR"],
+# ── Market-specific watchlists ────────────────────────────────────────────
+# US: ready. HK / CN: placeholders, populate when those markets are enabled.
+MARKET_WATCHLISTS: dict[str, dict[str, list[str]]] = {
+    "us": {
+        "etf":    ["QQQ", "TQQQ", "SQQQ", "SPY", "UVXY"],
+        "stocks": ["NVDA", "TSLA", "AAPL", "META", "MSTR"],
+    },
+    "hk": {
+        # yfinance format — 5-digit code (leading zeros) WITHOUT .HK suffix;
+        # the fetcher appends .HK automatically.
+        # e.g. "00700" = Tencent, "09988" = Alibaba, "02800" = Tracker Fund ETF
+        "etf":    [],
+        "stocks": [],
+    },
+    "cn": {
+        # akshare format — 6-digit code only, no exchange prefix.
+        # e.g. "510300" = CSI 300 ETF, "600519" = Moutai, "000858" = Wuliangye
+        "etf":    [],
+        "stocks": [],
+    },
 }
-ALL_SYMBOLS = WATCHLIST["etf"] + WATCHLIST["stocks"]
+
+# Active markets — toggle here when ready to enable HK / CN
+ACTIVE_MARKETS: list[str] = ["us"]
+
+# Convenience: combined list for the active markets
+ALL_SYMBOLS: list[str] = [
+    s
+    for mkt in ACTIVE_MARKETS
+    for group in MARKET_WATCHLISTS[mkt].values()
+    for s in group
+]
+
+# Legacy alias (used by strategies)
+WATCHLIST = MARKET_WATCHLISTS["us"]
 
 # Leveraged/inverse ETFs — only use trend strategies, no mean reversion
 LEVERAGED_ETFS = {"TQQQ", "SQQQ", "UVXY"}
@@ -44,11 +73,18 @@ HISTORY_YEARS = 10        # years of historical data for backtest
 DATA_INTERVAL = "1d"      # daily candles
 UI_REFRESH_SECONDS = 30   # Streamlit auto-refresh interval
 
-# ── Scheduler (US Eastern time) ───────────────────────────────────────────
-# Run after market close: 16:30 ET
-DAILY_JOB_HOUR = 16
-DAILY_JOB_MINUTE = 30
-TIMEZONE = "America/New_York"
+# ── Per-market scheduler config ───────────────────────────────────────────
+# Each entry: close time (local) + IANA timezone
+MARKET_SCHEDULE: dict[str, dict] = {
+    "us": {"hour": 16, "minute": 30, "timezone": "America/New_York"},
+    "hk": {"hour": 16, "minute":  0, "timezone": "Asia/Hong_Kong"},
+    "cn": {"hour": 15, "minute":  0, "timezone": "Asia/Shanghai"},
+}
+
+# Legacy aliases kept for backward-compat
+DAILY_JOB_HOUR   = MARKET_SCHEDULE["us"]["hour"]
+DAILY_JOB_MINUTE = MARKET_SCHEDULE["us"]["minute"]
+TIMEZONE         = MARKET_SCHEDULE["us"]["timezone"]
 
 # ── Paper trade ───────────────────────────────────────────────────────────
 PAPER_TRADE_POSITION_SIZE = 0.1   # 10% of portfolio per signal
