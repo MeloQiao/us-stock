@@ -143,7 +143,7 @@ STRATEGY_PARAMS = {
     "supertrend": {"atr_period": 10, "multiplier": 3.0},
     "donchian": {"entry_period": 20, "exit_period": 10},
     "ema_adx": {"ema_fast": 12, "ema_slow": 26, "adx_period": 14, "adx_threshold": 25},
-    "macd": {"fast": 12, "slow": 26, "signal": 9},
+    "macd": {"fast": 12, "slow": 26, "signal_period": 9},
     "roc": {"period_short": 20, "period_long": 60},
     "rsi": {"period": 14, "oversold": 30, "overbought": 70},
     "bollinger": {"period": 20, "std_dev": 2.0, "squeeze_threshold": 0.1},

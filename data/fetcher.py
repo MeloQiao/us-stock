@@ -273,6 +273,7 @@ def save_to_hf(df: pd.DataFrame, symbol: str, hf_repo: str, hf_token: str,
     try:
         from huggingface_hub import HfApi
         api = HfApi(token=hf_token)
+        api.create_repo(repo_id=hf_repo, repo_type="dataset", exist_ok=True, private=False)
         buf = io.BytesIO()
         df.reset_index().to_parquet(buf, index=False)
         buf.seek(0)
