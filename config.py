@@ -19,8 +19,50 @@ HF_DATASET_REPO = os.getenv("HF_DATASET_REPO", "")
 # US: ready. HK / CN: placeholders, populate when those markets are enabled.
 MARKET_WATCHLISTS: dict[str, dict[str, list[str]]] = {
     "us": {
-        "etf":    ["QQQ", "TQQQ", "SQQQ", "SPY", "UVXY"],
-        "stocks": ["NVDA", "TSLA", "AAPL", "META", "MSTR"],
+        "etf": [
+            # ── 宽基指数 ──────────────────────────────────────────────────
+            "SPY",   # 标普500          — 基准
+            "QQQ",   # 纳指100          — 主战场
+            "IWM",   # 罗素2000小盘股   — 风险偏好风向标
+            "DIA",   # 道琼斯工业       — 传统蓝筹基准
+            # ── 杠杆/反向 (仅趋势策略) ────────────────────────────────────
+            "TQQQ",  # 3x 做多纳指      — 趋势强时主攻
+            "SQQQ",  # 3x 做空纳指      — 对冲/熊市
+            "SPXL",  # 3x 做多标普      — 趋势强时进攻
+            "SOXL",  # 3x 做多费城半导体 — AI+芯片主题杠杆
+            "SOXS",  # 3x 做空费城半导体 — 芯片回调对冲
+            # ── 波动率 ───────────────────────────────────────────────────
+            "UVXY",  # VIX 衍生品       — 极端避险 (LEVERAGED)
+            # ── 行业主题 ─────────────────────────────────────────────────
+            "XLK",   # 科技板块ETF      — 科技精选
+            "ARKK",  # ARK Innovation   — 颠覆性创新高beta
+            "GLD",   # 黄金             — 宏观避险
+            "TLT",   # 20年期美债       — 宏观利率方向
+        ],
+        "stocks": [
+            # ── 科技巨头 (稳定趋势) ───────────────────────────────────────
+            "AAPL",  # 苹果     — 最稳定趋势，均线策略效果好
+            "MSFT",  # 微软     — AI+云计算，趋势清晰
+            "GOOGL", # 谷歌     — 广告+AI+云，稳健动量
+            "AMZN",  # 亚马逊   — 电商+云，趋势跟踪
+            "META",  # Meta     — 社交+AI眼镜，趋势走势清晰
+            # ── AI/芯片 (强动量) ──────────────────────────────────────────
+            "NVDA",  # 英伟达   — AI主线，动量策略效果极好
+            "AMD",   # AMD      — NVDA替代，高beta芯片
+            "SMCI",  # 超微电脑 — AI服务器，极高beta
+            "PLTR",  # Palantir — AI软件，机构青睐
+            "CRWD",  # CrowdStrike — 网络安全，强趋势
+            # ── 高波动/主题 ───────────────────────────────────────────────
+            "TSLA",  # 特斯拉   — 高波动，趋势+动量适合
+            "MSTR",  # MicroStrategy — 比特币代理，极高beta
+            "COIN",  # Coinbase — 加密货币代理，跟随BTC周期
+            "RKLB",  # Rocket Lab — 商业航天，高beta小盘
+            # ── 稳健蓝筹 ─────────────────────────────────────────────────
+            "JPM",   # 摩根大通 — 金融龙头，利率方向指标
+            "BRK-B", # 伯克希尔B — 价值投资基准
+            "V",     # Visa     — 支付网络，稳定复利
+            "XOM",   # 埃克森美孚 — 能源，宏观油价代理
+        ],
     },
     "hk": {
         # yfinance format — 5-digit code WITHOUT .HK suffix (auto-appended by fetcher)
@@ -92,7 +134,7 @@ WATCHLIST = MARKET_WATCHLISTS["us"]
 
 # Leveraged/inverse ETFs — only use trend strategies, no mean reversion
 # Includes HK 2x ETFs (07226 / 07500)
-LEVERAGED_ETFS = {"TQQQ", "SQQQ", "UVXY", "07226", "07500"}
+LEVERAGED_ETFS = {"TQQQ", "SQQQ", "SPXL", "SOXL", "SOXS", "UVXY", "07226", "07500"}
 
 # ── Strategy parameters ───────────────────────────────────────────────────
 STRATEGY_PARAMS = {
