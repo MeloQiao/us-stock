@@ -3,8 +3,9 @@ yfinance>=0.2.36
 pandas>=2.0.0
 numpy>=1.24.0
 
-# Backtest
-vectorbt>=0.26.2
+# Backtest (optional — pandas fallback used if vectorbt unavailable)
+# Heavy numba/llvmlite deps can timeout on HF Spaces; uncomment for local use:
+# vectorbt>=0.26.2
 
 # UI
 streamlit>=1.32.0
