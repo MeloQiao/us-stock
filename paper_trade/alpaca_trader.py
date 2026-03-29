@@ -172,7 +172,13 @@ def execute_signals(
     Parameters
     ----------
     signals : {symbol: signal} where signal is 1 (buy), -1 (sell/exit), 0 (hold)
-    position_size : fraction of portfolio to allocate per position (default 10%)
+    position_size : unused — allocation is equal-weight across all buy signals.
+        Kept for backward compatibility.
+
+    Allocation logic:
+      - Count all buy signals (signal == 1) that have no existing position.
+      - Divide total portfolio_value equally among them.
+      - Cap each order by available buying_power.
 
     Returns list of executed order results.
     """
@@ -182,32 +188,46 @@ def execute_signals(
         return []
 
     portfolio_value = account["portfolio_value"]
+    buying_power = account["buying_power"]
     positions = {p["symbol"]: p for p in get_positions()}
     results = []
 
+    # ── 1. Exits first (free up capital before new entries) ───────────────
     for symbol, signal in signals.items():
-        try:
-            in_position = symbol in positions
-
-            if signal == 1 and not in_position:
-                # Enter long position
-                notional = portfolio_value * position_size
-                if notional < 1:
-                    continue
-                order = place_market_order(symbol, "buy", notional=notional)
-                if order:
-                    results.append({**order, "action": "enter_long"})
-
-            elif signal == -1 and in_position:
-                # Exit position
+        if signal == -1 and symbol in positions:
+            try:
                 order = close_position(symbol)
                 if order:
                     results.append({**order, "action": "exit"})
+            except Exception as e:
+                logger.error("Exit error for %s: %s", symbol, e)
 
-            # signal == 0 or already in correct state: do nothing
+    # ── 2. Equal-weight entries ───────────────────────────────────────────
+    new_buys = [sym for sym, sig in signals.items() if sig == 1 and sym not in positions]
 
+    if not new_buys:
+        return results
+
+    notional_per = portfolio_value / len(new_buys)
+    # Refresh buying_power after exits (approximate: use original + freed capital)
+    # Hard cap: never spend more than current buying_power in total
+    notional_per = min(notional_per, buying_power / len(new_buys))
+
+    logger.info(
+        "Equal-weight buy: %d symbols, %.2f USD each (portfolio=%.2f)",
+        len(new_buys), notional_per, portfolio_value,
+    )
+
+    for symbol in new_buys:
+        try:
+            if notional_per < 1:
+                logger.warning("Notional too small for %s (%.2f), skipping.", symbol, notional_per)
+                continue
+            order = place_market_order(symbol, "buy", notional=notional_per)
+            if order:
+                results.append({**order, "action": "enter_long", "notional": notional_per})
         except Exception as e:
-            logger.error("Signal execution error for %s: %s", symbol, e)
+            logger.error("Buy error for %s: %s", symbol, e)
 
     return results
 
