@@ -72,6 +72,7 @@ MARKET_WATCHLISTS: dict[str, dict[str, list[str]]] = {
             "03067",  # iShares 恒生科技 ETF           — HK tech index
             "03188",  # 华夏沪深300 ETF (H shares)    — CSI 300 in HK
             "07226",  # 南方2x做多恒生科技             — TQQQ equiv (LEVERAGED)
+            "07552",  # 南方2x做空恒生科技             — SQQQ equiv (LEVERAGED)
             "07500",  # 三星2x做多恒生指数             — TQQQ-HSI (LEVERAGED)
         ],
         "stocks": [
@@ -134,7 +135,7 @@ WATCHLIST = MARKET_WATCHLISTS["us"]
 
 # Leveraged/inverse ETFs — only use trend strategies, no mean reversion
 # Includes HK 2x ETFs (07226 / 07500)
-LEVERAGED_ETFS = {"TQQQ", "SQQQ", "SPXL", "SOXL", "SOXS", "UVXY", "07226", "07500"}
+LEVERAGED_ETFS = {"TQQQ", "SQQQ", "SPXL", "SOXL", "SOXS", "UVXY", "07226", "07552", "07500"}
 
 # ── Strategy parameters ───────────────────────────────────────────────────
 STRATEGY_PARAMS = {
