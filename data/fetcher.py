@@ -360,3 +360,38 @@ def save_signals_to_hf(signals_df: pd.DataFrame, hf_repo: str, hf_token: str,
     except Exception as e:
         logger.error("HF signals save failed [%s]: %s", market, e)
         return False
+
+
+def cleanup_old_signals_on_hf(
+    hf_repo: str,
+    hf_token: str,
+    market: Market = "us",
+    keep_days: int = 90,
+) -> int:
+    """
+    Delete signal files older than keep_days from HF Dataset.
+    Returns number of files deleted.
+    """
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi(token=hf_token)
+        files = api.list_repo_files(repo_id=hf_repo, repo_type="dataset", token=hf_token)
+        prefix = f"signals/{market}/signals_"
+        cutoff = (datetime.today() - timedelta(days=keep_days)).strftime("%Y%m%d")
+        deleted = 0
+        for f in files:
+            if f.startswith(prefix):
+                date_str = f.replace(prefix, "").replace(".parquet", "")
+                if date_str < cutoff:
+                    api.delete_file(
+                        path_in_repo=f,
+                        repo_id=hf_repo,
+                        repo_type="dataset",
+                        commit_message=f"Cleanup old signals: {f}",
+                    )
+                    deleted += 1
+                    logger.info("Deleted old signal file: %s", f)
+        return deleted
+    except Exception as e:
+        logger.warning("HF signal cleanup failed [%s]: %s", market, e)
+        return 0

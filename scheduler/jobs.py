@@ -67,7 +67,7 @@ def run_daily_pipeline(market: Market = "us") -> dict:
         return summary
 
     # ── 1. Fetch data ─────────────────────────────────────────────────
-    from data.fetcher import fetch_multiple, save_to_hf, save_signals_to_hf
+    from data.fetcher import fetch_multiple, save_to_hf, save_signals_to_hf, cleanup_old_signals_on_hf
     import pandas as pd
 
     logger.info("Fetching %d symbols for [%s]...", len(symbols), market)
@@ -147,6 +147,10 @@ def run_daily_pipeline(market: Market = "us") -> dict:
                     })
             if rows:
                 save_signals_to_hf(pd.DataFrame(rows), HF_DATASET_REPO, HF_TOKEN, market=market)
+
+            deleted = cleanup_old_signals_on_hf(HF_DATASET_REPO, HF_TOKEN, market=market, keep_days=90)
+            if deleted:
+                logger.info("[%s] Cleaned up %d old signal files.", market, deleted)
             logger.info("[%s] Persisted to HF Dataset.", market)
         except Exception as e:
             logger.error("[%s] HF persist failed: %s", market, e)
