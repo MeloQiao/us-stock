@@ -23,17 +23,56 @@ MARKET_WATCHLISTS: dict[str, dict[str, list[str]]] = {
         "stocks": ["NVDA", "TSLA", "AAPL", "META", "MSTR"],
     },
     "hk": {
-        # yfinance format — 5-digit code (leading zeros) WITHOUT .HK suffix;
-        # the fetcher appends .HK automatically.
-        # e.g. "00700" = Tencent, "09988" = Alibaba, "02800" = Tracker Fund ETF
-        "etf":    [],
-        "stocks": [],
+        # yfinance format — 5-digit code WITHOUT .HK suffix (auto-appended by fetcher)
+        "etf": [
+            "02800",  # 盈富基金 (Tracker Fund / HSI) — SPY equiv
+            "03032",  # 南方纳斯达克100 ETF          — QQQ equiv
+            "03067",  # iShares 恒生科技 ETF           — HK tech index
+            "03188",  # 华夏沪深300 ETF (H shares)    — CSI 300 in HK
+            "07226",  # 南方2x做多恒生科技             — TQQQ equiv (LEVERAGED)
+            "07500",  # 三星2x做多恒生指数             — TQQQ-HSI (LEVERAGED)
+        ],
+        "stocks": [
+            "00700",  # 腾讯    — AAPL (stable trend, huge ecosystem)
+            "09988",  # 阿里巴巴 — TSLA (high volatility, recovery play)
+            "03690",  # 美团    — META (strong domestic trend)
+            "09618",  # 京东    — mid-beta e-commerce
+            "09999",  # 网易    — stable gaming + education
+            "01024",  # 快手    — high-beta short video (social media)
+            "00981",  # 中芯国际H — NVDA proxy (China's leading foundry)
+            "01211",  # 比亚迪H  — TSLA proxy (world's largest EV maker)
+            "09866",  # 蔚来    — high-beta EV (premium segment)
+            "02015",  # 理想汽车 — strong trend EV
+            "02382",  # 舜宇光学 — AI optics hardware
+            "09626",  # 哔哩哔哩 — high-beta content platform
+        ],
     },
     "cn": {
-        # akshare format — 6-digit code only, no exchange prefix.
-        # e.g. "510300" = CSI 300 ETF, "600519" = Moutai, "000858" = Wuliangye
-        "etf":    [],
-        "stocks": [],
+        # akshare format — 6-digit code only, no exchange prefix
+        "etf": [
+            "510300",  # 华泰沪深300ETF    — SPY equiv (benchmark)
+            "159915",  # 易方达创业板ETF   — QQQ equiv (China growth/tech)
+            "588000",  # 华夏科创50ETF     — STAR Market (China's Nasdaq)
+            "512480",  # 国联半导体ETF     — SOXX equiv (AI hardware theme)
+            "515070",  # 华夏AI ETF        — pure AI sector
+            "510500",  # 南方中证500ETF    — mid-cap (IWM equiv)
+            "159741",  # 国泰纳斯达克100   — US tech exposure via A-shares
+            "159745",  # 新能源ETF         — EV + battery theme
+        ],
+        "stocks": [
+            "600519",  # 贵州茅台  — AAPL (most stable trend in A-shares)
+            "300750",  # 宁德时代  — NVDA (battery + EV momentum king)
+            "002594",  # 比亚迪A   — TSLA proxy (EV)
+            "688981",  # 中芯国际A — NVDA proxy (China's leading foundry)
+            "688111",  # 金山办公  — AI software (China's Microsoft Office)
+            "603501",  # 韦尔股份  — AI image sensor (camera supply chain)
+            "688041",  # 海光信息  — domestic compute / AI infra (high beta)
+            "300760",  # 迈瑞医疗  — stable medical devices
+            "601012",  # 隆基绿能  — solar energy trend
+            "002415",  # 海康威视  — AI vision / surveillance
+            "600036",  # 招商银行  — China's best retail bank (stable)
+            "000333",  # 美的集团  — stable consumer appliances
+        ],
     },
 }
 
@@ -52,7 +91,8 @@ ALL_SYMBOLS: list[str] = [
 WATCHLIST = MARKET_WATCHLISTS["us"]
 
 # Leveraged/inverse ETFs — only use trend strategies, no mean reversion
-LEVERAGED_ETFS = {"TQQQ", "SQQQ", "UVXY"}
+# Includes HK 2x ETFs (07226 / 07500)
+LEVERAGED_ETFS = {"TQQQ", "SQQQ", "UVXY", "07226", "07500"}
 
 # ── Strategy parameters ───────────────────────────────────────────────────
 STRATEGY_PARAMS = {
