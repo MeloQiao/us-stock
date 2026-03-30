@@ -11,10 +11,15 @@ from typing import Optional
 
 import httpx
 
+from config import SYMBOL_NAMES
+
 logger = logging.getLogger(__name__)
 
 SIGNAL_EMOJI = {1: "🟢", -1: "🔴", 0: "⚪"}
 SIGNAL_TEXT = {1: "买入 BUY", -1: "卖出 SELL", 0: "持观望 HOLD"}
+
+_MARKET_LABEL = {"us": "🇺🇸 美股 (US)", "hk": "🇭🇰 港股 (HK)", "cn": "🇨🇳 A股 (CN)"}
+_MARKET_COLOR = {"us": "blue", "hk": "green", "cn": "red"}
 
 
 def _build_portfolio_section(summary: dict) -> list[dict]:
@@ -76,6 +81,7 @@ def _build_signal_card(
     vix_value: Optional[float] = None,
     trades: Optional[list[dict]] = None,
     portfolio_summary: Optional[dict] = None,
+    market: str = "us",
 ) -> dict:
     """
     Build a Feishu interactive card payload.
@@ -84,12 +90,14 @@ def _build_signal_card(
                                total_score, max_possible}
     trades         : list of executed paper trade orders (optional),
                      each containing {action, symbol, notional, score}
+    market         : "us" | "hk" | "cn" — controls card color and title
     """
+    market_label = _MARKET_LABEL.get(market, market.upper())
     header = {
-        "template": "blue",
+        "template": _MARKET_COLOR.get(market, "blue"),
         "title": {
             "tag": "plain_text",
-            "content": f"📊 US Stock 策略信号 · {date}",
+            "content": f"📊 {market_label} 策略信号 · {date}",
         },
     }
 
@@ -118,12 +126,14 @@ def _build_signal_card(
         emoji = SIGNAL_EMOJI[headline_signal]
         score = composite.get("total_score", "—") if composite else "—"
         max_s = composite.get("max_possible", 9) if composite else 9
+        name = SYMBOL_NAMES.get(symbol, "")
+        display = f"{symbol} {name}" if name else symbol
 
         elements.append({
             "tag": "div",
             "text": {
                 "tag": "lark_md",
-                "content": f"**{emoji} {symbol}**  综合评分: {score}/{max_s}  →  {SIGNAL_TEXT[headline_signal]}",
+                "content": f"**{emoji} {display}**  综合评分: {score}/{max_s}  →  {SIGNAL_TEXT[headline_signal]}",
             },
         })
 
@@ -200,6 +210,7 @@ def send_signal_alert(
     date: Optional[str] = None,
     trades: Optional[list[dict]] = None,
     portfolio_summary: Optional[dict] = None,
+    market: str = "us",
 ) -> bool:
     """
     Send strategy signal alert to Feishu group via webhook.
@@ -221,6 +232,7 @@ def send_signal_alert(
     payload = _build_signal_card(
         date, symbol_signals, vix_value,
         trades=trades, portfolio_summary=portfolio_summary,
+        market=market,
     )
 
     try:

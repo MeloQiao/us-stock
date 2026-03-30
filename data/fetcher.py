@@ -148,7 +148,11 @@ def fetch_history(
     if market == "cn":
         df = _fetch_akshare(symbol, start, end)
     elif market == "hk":
-        yf_sym = symbol if symbol.upper().endswith(".HK") else f"{symbol}.HK"
+        if symbol.upper().endswith(".HK"):
+            yf_sym = symbol
+        else:
+            # Config stores 5-digit codes (e.g. "00700"); yfinance wants 4-digit (e.g. "0700.HK")
+            yf_sym = symbol.lstrip("0").zfill(4) + ".HK"
         df = _fetch_yfinance(yf_sym, start, end)
     else:  # us
         df = _fetch_yfinance(symbol, start, end)
@@ -242,7 +246,10 @@ def _quote_akshare_hk(symbol: str) -> dict:
         logger.warning("akshare HK quote failed for %s: %s", symbol, e)
         # Fallback to yfinance .HK
         try:
-            yf_sym = symbol if symbol.upper().endswith(".HK") else f"{symbol}.HK"
+            if symbol.upper().endswith(".HK"):
+                yf_sym = symbol
+            else:
+                yf_sym = symbol.lstrip("0").zfill(4) + ".HK"
             return _quote_yfinance(yf_sym)
         except Exception:
             return _empty_quote(symbol)

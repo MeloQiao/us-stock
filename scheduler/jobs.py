@@ -185,6 +185,7 @@ def run_daily_pipeline(market: Market = "us") -> dict:
                 vix_value=vix_value,
                 trades=trade_results if trade_results else None,
                 portfolio_summary=portfolio_summary if portfolio_summary else None,
+                market=market,
             )
             summary["feishu_sent"] = ok
         except Exception as e:
