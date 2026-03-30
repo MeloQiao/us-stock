@@ -57,8 +57,42 @@ if "last_fetch" not in st.session_state:
 
 @st.cache_data(ttl=UI_REFRESH_SECONDS)
 def get_quotes(symbols: list[str], market: str = "us") -> list[dict]:
-    from data.fetcher import fetch_quotes
-    return fetch_quotes(symbols, market=market)
+    """
+    During market hours: fetch live quotes from yfinance / akshare.
+    During closed hours: read last-close price from HF Dataset OHLCV cache
+    — much faster, no live API calls needed.
+    """
+    from utils.market_hours import is_market_open
+
+    if is_market_open(market):
+        from data.fetcher import fetch_quotes
+        return fetch_quotes(symbols, market=market)
+
+    # ── Market closed: use last close from HF-cached OHLCV ──────────────
+    results = []
+    for sym in symbols:
+        try:
+            df = get_history(sym, years=1, market=market)
+            if df is None or df.empty:
+                raise ValueError("empty")
+            last = df.iloc[-1]
+            prev = df.iloc[-2] if len(df) >= 2 else last
+            change = last["Close"] - prev["Close"]
+            change_pct = change / prev["Close"] * 100 if prev["Close"] else 0.0
+            results.append({
+                "symbol": sym,
+                "price": round(float(last["Close"]), 4),
+                "change": round(float(change), 4),
+                "change_pct": round(float(change_pct), 2),
+                "volume": float(last.get("Volume", 0)),
+                "timestamp": str(df.index[-1].date()),
+            })
+        except Exception:
+            results.append({
+                "symbol": sym, "price": None, "change": None,
+                "change_pct": None, "volume": None, "timestamp": None,
+            })
+    return results
 
 
 @st.cache_data(ttl=300)
@@ -138,7 +172,9 @@ def _render_market_section(market: str) -> None:
     if not signals:
         st.caption("⏳ 暂无今日信号（daily pipeline 尚未运行）")
 
-    # Quotes
+    # Quotes — live during market hours, cached close price when closed
+    from utils.market_hours import is_market_open
+    market_status = "📈 盘中" if is_market_open(market) else "🔒 闭市 (上次收盘价)"
     with st.spinner(f"加载 {_MARKET_LABEL[market]} 行情..."):
         quotes = get_quotes(symbols, market=market)
 
@@ -173,7 +209,7 @@ def _render_market_section(market: str) -> None:
         except Exception:
             return ""
 
-    st.caption(f"信号来源: {source_label} · {len(quotes_df)} 个标的")
+    st.caption(f"信号来源: {source_label} · {market_status} · {len(quotes_df)} 个标的")
     st.dataframe(
         display_df.style.applymap(color_change, subset=["涨跌%"]),
         use_container_width=True,
