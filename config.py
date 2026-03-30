@@ -119,8 +119,19 @@ MARKET_WATCHLISTS: dict[str, dict[str, list[str]]] = {
     },
 }
 
-# Active markets — toggle here when ready to enable HK / CN
-ACTIVE_MARKETS: list[str] = ["us"]
+# Active markets — us always on; hk/cn enabled with virtual portfolio
+ACTIVE_MARKETS: list[str] = ["us", "hk", "cn"]
+
+# ── Virtual portfolio (HK / CN — no paper trading API) ───────────────────
+# Capital in local currency. Positions tracked in HF Dataset.
+VIRTUAL_PORTFOLIO_CAPITAL: dict[str, float] = {
+    "hk": 1_000_000,  # HKD 100万
+    "cn": 1_000_000,  # CNY 100万
+}
+VIRTUAL_PORTFOLIO_CURRENCY: dict[str, str] = {
+    "hk": "HKD",
+    "cn": "CNY",
+}
 
 # Convenience: combined list for the active markets
 ALL_SYMBOLS: list[str] = [

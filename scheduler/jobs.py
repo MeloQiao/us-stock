@@ -28,6 +28,8 @@ from config import (
     HF_TOKEN,
     HF_DATASET_REPO,
     ALPACA_API_KEY,
+    VIRTUAL_PORTFOLIO_CAPITAL,
+    VIRTUAL_PORTFOLIO_CURRENCY,
 )
 
 logger = logging.getLogger(__name__)
@@ -106,17 +108,43 @@ def run_daily_pipeline(market: Market = "us") -> dict:
             logger.error("[%s] Strategy error for %s: %s", market, symbol, e)
             summary["errors"].append(f"Strategy failed {symbol}: {e}")
 
-    # ── 3. Paper trade (US only, Alpaca) ──────────────────────────────
+    # ── 3. Paper / virtual trade ──────────────────────────────────────
     trade_results: list = []
+    portfolio_summary: dict = {}
+    prices: dict[str, float] = {
+        sym: float(df["Close"].iloc[-1]) for sym, df in data.items() if not df.empty
+    }
+
     if market == "us" and ALPACA_API_KEY:
         try:
-            from paper_trade.alpaca_trader import execute_signals
+            from paper_trade.alpaca_trader import execute_signals, get_portfolio_summary
             trade_results = execute_signals(composite_signals, scores=composite_scores)
             summary["trades"] = trade_results
+            portfolio_summary = get_portfolio_summary()
             logger.info("[us] Paper trades: %d orders", len(trade_results))
         except Exception as e:
             logger.error("[us] Paper trade failed: %s", e)
             summary["errors"].append(f"Paper trade failed: {e}")
+
+    elif market in ("hk", "cn") and HF_TOKEN and HF_DATASET_REPO:
+        try:
+            from paper_trade.virtual_portfolio import VirtualPortfolio
+            vp = VirtualPortfolio(
+                market=market,
+                total_capital=VIRTUAL_PORTFOLIO_CAPITAL[market],
+                currency=VIRTUAL_PORTFOLIO_CURRENCY[market],
+                hf_repo=HF_DATASET_REPO,
+                hf_token=HF_TOKEN,
+            )
+            trade_results = vp.execute_signals(
+                composite_signals, scores=composite_scores, prices=prices,
+            )
+            portfolio_summary = vp.get_summary(prices=prices)
+            summary["trades"] = trade_results
+            logger.info("[%s] Virtual trades: %d orders", market, len(trade_results))
+        except Exception as e:
+            logger.error("[%s] Virtual portfolio failed: %s", market, e)
+            summary["errors"].append(f"Virtual portfolio failed: {e}")
 
     # ── 4. Feishu alert ───────────────────────────────────────────────
     if FEISHU_WEBHOOK_URL and all_results:
@@ -131,6 +159,7 @@ def run_daily_pipeline(market: Market = "us") -> dict:
                 FEISHU_WEBHOOK_URL, signal_list,
                 vix_value=vix_value,
                 trades=trade_results if trade_results else None,
+                portfolio_summary=portfolio_summary if portfolio_summary else None,
             )
             summary["feishu_sent"] = ok
         except Exception as e:

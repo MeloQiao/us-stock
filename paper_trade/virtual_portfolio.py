@@ -1,0 +1,272 @@
+"""
+Virtual portfolio tracker for markets without a paper trading API (HK, CN).
+
+Positions and trade history are persisted to HF Dataset:
+  portfolio/{market}/open_positions.parquet
+  portfolio/{market}/trade_history.parquet
+
+Open positions schema:
+  symbol | entry_date | entry_price | shares | notional | score | currency
+
+Trade history schema:
+  date | symbol | action | price | shares | notional | score | pnl | currency
+"""
+
+from __future__ import annotations
+
+import io
+import logging
+from datetime import datetime
+from typing import Optional
+
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+_OPEN_COLS = ["symbol", "entry_date", "entry_price", "shares", "notional", "score", "currency"]
+_HIST_COLS = ["date", "symbol", "action", "price", "shares", "notional", "score", "pnl", "currency"]
+
+
+class VirtualPortfolio:
+    """
+    Score-weighted virtual portfolio for a single market.
+
+    Parameters
+    ----------
+    market        : "hk" | "cn"
+    total_capital : starting capital in local currency
+    currency      : display label, e.g. "HKD" or "CNY"
+    hf_repo       : HF Dataset repo id
+    hf_token      : HF access token
+    """
+
+    def __init__(
+        self,
+        market: str,
+        total_capital: float,
+        currency: str,
+        hf_repo: str,
+        hf_token: str,
+    ):
+        self.market = market
+        self.total_capital = total_capital
+        self.currency = currency
+        self.hf_repo = hf_repo
+        self.hf_token = hf_token
+
+        self._open: pd.DataFrame = self._load_open()
+        self._history: pd.DataFrame = self._load_history()
+
+    # ── HF I/O ────────────────────────────────────────────────────────────
+
+    def _hf_path(self, name: str) -> str:
+        return f"portfolio/{self.market}/{name}.parquet"
+
+    def _load_df(self, name: str, columns: list[str]) -> pd.DataFrame:
+        try:
+            from huggingface_hub import hf_hub_download
+            path = hf_hub_download(
+                repo_id=self.hf_repo,
+                filename=self._hf_path(name),
+                repo_type="dataset",
+                token=self.hf_token,
+            )
+            return pd.read_parquet(path)
+        except Exception as e:
+            logger.debug("Virtual portfolio %s load failed [%s]: %s", name, self.market, e)
+            return pd.DataFrame(columns=columns)
+
+    def _save_df(self, df: pd.DataFrame, name: str) -> None:
+        try:
+            from huggingface_hub import HfApi
+            api = HfApi(token=self.hf_token)
+            api.create_repo(repo_id=self.hf_repo, repo_type="dataset", exist_ok=True, private=False)
+            buf = io.BytesIO()
+            df.to_parquet(buf, index=False)
+            buf.seek(0)
+            api.upload_file(
+                path_or_fileobj=buf,
+                path_in_repo=self._hf_path(name),
+                repo_id=self.hf_repo,
+                repo_type="dataset",
+                commit_message=f"Virtual portfolio update [{self.market}] {datetime.today().strftime('%Y-%m-%d')}",
+            )
+        except Exception as e:
+            logger.error("Virtual portfolio %s save failed [%s]: %s", name, self.market, e)
+
+    def _load_open(self) -> pd.DataFrame:
+        return self._load_df("open_positions", _OPEN_COLS)
+
+    def _load_history(self) -> pd.DataFrame:
+        return self._load_df("trade_history", _HIST_COLS)
+
+    # ── Portfolio state ────────────────────────────────────────────────────
+
+    @property
+    def open_symbols(self) -> set[str]:
+        return set(self._open["symbol"].tolist()) if not self._open.empty else set()
+
+    @property
+    def invested_notional(self) -> float:
+        return float(self._open["notional"].sum()) if not self._open.empty else 0.0
+
+    @property
+    def available_capital(self) -> float:
+        return max(self.total_capital - self.invested_notional, 0.0)
+
+    # ── Execute signals ────────────────────────────────────────────────────
+
+    def execute_signals(
+        self,
+        signals: dict[str, int],
+        scores: dict[str, int],
+        prices: dict[str, float],
+        date: Optional[str] = None,
+    ) -> list[dict]:
+        """
+        Process signals for this market. Updates internal state and persists.
+
+        Parameters
+        ----------
+        signals : {symbol: 1 / -1 / 0}
+        scores  : {symbol: composite_score}
+        prices  : {symbol: last_close_price}  in local currency
+        date    : trade date string (YYYY-MM-DD), defaults to today
+
+        Returns list of trade records for Feishu notification.
+        """
+        date = date or datetime.today().strftime("%Y-%m-%d")
+        results: list[dict] = []
+
+        # ── 1. Exits ──────────────────────────────────────────────────────
+        for symbol, signal in signals.items():
+            if signal != -1 or symbol not in self.open_symbols:
+                continue
+            row = self._open[self._open["symbol"] == symbol].iloc[0]
+            exit_price = prices.get(symbol, 0.0)
+            entry_price = float(row["entry_price"])
+            shares = float(row["shares"])
+            entry_notional = float(row["notional"])
+            pnl = (exit_price - entry_price) * shares if exit_price > 0 else None
+            pnl_pct = (pnl / entry_notional * 100) if (pnl is not None and entry_notional > 0) else None
+
+            trade = {
+                "date": date, "symbol": symbol, "action": "sell",
+                "price": exit_price, "shares": shares,
+                "notional": round(exit_price * shares, 2) if exit_price > 0 else entry_notional,
+                "score": int(row["score"]),
+                "pnl": round(pnl, 2) if pnl is not None else None,
+                "pnl_pct": round(pnl_pct, 2) if pnl_pct is not None else None,
+                "currency": self.currency,
+            }
+            results.append({**trade, "entry_price": entry_price, "entry_date": str(row["entry_date"])})
+
+            # Remove from open, append to history
+            self._open = self._open[self._open["symbol"] != symbol].reset_index(drop=True)
+            hist_row = {k: trade.get(k) for k in _HIST_COLS}
+            self._history = pd.concat(
+                [self._history, pd.DataFrame([hist_row])], ignore_index=True
+            )
+            logger.info("[%s] Exit %s pnl=%.2f (%s)", self.market, symbol,
+                        pnl or 0, self.currency)
+
+        # ── 2. Entries (score-weighted, from available capital) ───────────
+        new_buys = [
+            sym for sym, sig in signals.items()
+            if sig == 1 and sym not in self.open_symbols
+        ]
+
+        if new_buys and self.available_capital > 0:
+            raw_weights = {sym: max(scores.get(sym, 1), 1) for sym in new_buys}
+            total_w = sum(raw_weights.values())
+            budget = self.available_capital  # only spend what's available
+
+            for symbol in new_buys:
+                notional = budget * (raw_weights[symbol] / total_w)
+                price = prices.get(symbol, 0.0)
+                if notional < 1 or price <= 0:
+                    logger.warning("[%s] Skip %s notional=%.2f price=%.4f",
+                                   self.market, symbol, notional, price)
+                    continue
+
+                shares = round(notional / price, 4)
+                score = raw_weights[symbol]
+                trade = {
+                    "date": date, "symbol": symbol, "action": "buy",
+                    "price": price, "shares": shares,
+                    "notional": round(notional, 2),
+                    "score": score, "pnl": None,
+                    "currency": self.currency,
+                }
+                results.append({**trade, "est_shares": shares, "ref_price": price})
+
+                open_row = {
+                    "symbol": symbol, "entry_date": date,
+                    "entry_price": price, "shares": shares,
+                    "notional": round(notional, 2),
+                    "score": score, "currency": self.currency,
+                }
+                self._open = pd.concat(
+                    [self._open, pd.DataFrame([open_row])], ignore_index=True
+                )
+                hist_row = {k: trade.get(k) for k in _HIST_COLS}
+                self._history = pd.concat(
+                    [self._history, pd.DataFrame([hist_row])], ignore_index=True
+                )
+                logger.info("[%s] Buy %s shares=%.4f notional=%.2f score=%d",
+                            self.market, symbol, shares, notional, score)
+
+        # ── 3. Persist ────────────────────────────────────────────────────
+        if results:
+            self._save_df(self._open, "open_positions")
+            self._save_df(self._history, "trade_history")
+
+        return results
+
+    # ── Read-only helpers (for dashboard) ─────────────────────────────────
+
+    def get_open_positions(self) -> list[dict]:
+        """Return current open positions with live P&L if prices available."""
+        return self._open.to_dict(orient="records")
+
+    def get_trade_history(self, limit: int = 50) -> list[dict]:
+        """Return recent trade history."""
+        if self._history.empty:
+            return []
+        return self._history.tail(limit).to_dict(orient="records")
+
+    def get_summary(self, prices: Optional[dict[str, float]] = None) -> dict:
+        """
+        Return portfolio summary with unrealized P&L.
+        prices: latest prices for open positions (optional).
+        """
+        open_positions = self.get_open_positions()
+        unrealized_pnl = 0.0
+        if prices:
+            for pos in open_positions:
+                sym = pos["symbol"]
+                if sym in prices and prices[sym] > 0:
+                    pos["current_price"] = prices[sym]
+                    pos["unrealized_pnl"] = round(
+                        (prices[sym] - pos["entry_price"]) * pos["shares"], 2
+                    )
+                    pos["unrealized_pct"] = round(
+                        (prices[sym] - pos["entry_price"]) / pos["entry_price"] * 100, 2
+                    )
+                    unrealized_pnl += pos["unrealized_pnl"]
+
+        realized_pnl = float(
+            self._history[self._history["action"] == "sell"]["pnl"].sum()
+        ) if not self._history.empty else 0.0
+
+        return {
+            "market": self.market,
+            "currency": self.currency,
+            "total_capital": self.total_capital,
+            "invested": round(self.invested_notional, 2),
+            "available": round(self.available_capital, 2),
+            "open_count": len(open_positions),
+            "unrealized_pnl": round(unrealized_pnl, 2),
+            "realized_pnl": round(realized_pnl, 2),
+            "open_positions": open_positions,
+        }

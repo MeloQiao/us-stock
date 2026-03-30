@@ -17,11 +17,65 @@ SIGNAL_EMOJI = {1: "🟢", -1: "🔴", 0: "⚪"}
 SIGNAL_TEXT = {1: "买入 BUY", -1: "卖出 SELL", 0: "持观望 HOLD"}
 
 
+def _build_portfolio_section(summary: dict) -> list[dict]:
+    """Build card elements for portfolio NAV + open positions."""
+    elements = []
+    currency = summary.get("currency", "USD")
+    market = summary.get("market", "").upper()
+
+    # NAV summary line
+    acct = summary.get("account", {})  # Alpaca format
+    if acct:
+        nav = acct.get("portfolio_value", 0)
+        cash = acct.get("cash", 0)
+        bp = acct.get("buying_power", 0)
+        nav_line = (
+            f"**💼 {market} 纸账户 NAV**: ${nav:,.0f} USD  |  "
+            f"现金: ${cash:,.0f}  |  买入力: ${bp:,.0f}"
+        )
+    else:
+        total = summary.get("total_capital", 0)
+        invested = summary.get("invested", 0)
+        avail = summary.get("available", 0)
+        unreal = summary.get("unrealized_pnl", 0)
+        realized = summary.get("realized_pnl", 0)
+        nav = total + realized + unreal
+        nav_line = (
+            f"**💼 {market} 虚拟账户 NAV**: {nav:,.0f} {currency}  |  "
+            f"已投入: {invested:,.0f}  |  可用: {avail:,.0f}  |  "
+            f"浮盈: {unreal:+,.0f}  |  已实现: {realized:+,.0f}"
+        )
+
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": nav_line}})
+
+    # Open positions table
+    positions = summary.get("open_positions") or summary.get("positions", [])
+    if positions:
+        rows = ["| 标的 | 持仓量 | 成本价 | 现价 | 浮盈 |",
+                "|------|--------|--------|------|------|"]
+        for p in positions:
+            sym = p.get("symbol", "")
+            qty = p.get("qty") or p.get("shares", 0)
+            entry = p.get("avg_entry_price") or p.get("entry_price", 0)
+            cur = p.get("current_price") or p.get("entry_price", 0)
+            pnl = p.get("unrealized_pl") or p.get("unrealized_pnl", None)
+            pnl_pct = p.get("unrealized_plpc") or p.get("unrealized_pct", None)
+            pnl_str = f"{pnl:+,.0f} ({pnl_pct:+.1f}%)" if pnl is not None and pnl_pct is not None else "—"
+            rows.append(f"| {sym} | {qty} | {entry:,.2f} | {cur:,.2f} | {pnl_str} |")
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(rows)}})
+    else:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "_暂无持仓_"}})
+
+    elements.append({"tag": "hr"})
+    return elements
+
+
 def _build_signal_card(
     date: str,
     symbol_signals: list[dict],
     vix_value: Optional[float] = None,
     trades: Optional[list[dict]] = None,
+    portfolio_summary: Optional[dict] = None,
 ) -> dict:
     """
     Build a Feishu interactive card payload.
@@ -86,6 +140,10 @@ def _build_signal_card(
         })
         elements.append({"tag": "hr"})
 
+    # ── Portfolio NAV + positions ─────────────────────────────────────────
+    if portfolio_summary is not None:
+        elements.extend(_build_portfolio_section(portfolio_summary))
+
     # ── Paper trade orders ────────────────────────────────────────────────
     if trades is not None:
         elements.append({
@@ -141,24 +199,29 @@ def send_signal_alert(
     vix_value: Optional[float] = None,
     date: Optional[str] = None,
     trades: Optional[list[dict]] = None,
+    portfolio_summary: Optional[dict] = None,
 ) -> bool:
     """
     Send strategy signal alert to Feishu group via webhook.
 
     Parameters
     ----------
-    webhook_url    : Feishu custom bot webhook URL
-    symbol_signals : list of signal dicts
-    vix_value      : current VIX level (optional)
-    date           : date string, defaults to today
-    trades         : paper trade orders to include in the card (optional)
+    webhook_url       : Feishu custom bot webhook URL
+    symbol_signals    : list of signal dicts
+    vix_value         : current VIX level (optional)
+    date              : date string, defaults to today
+    trades            : paper/virtual trade orders (optional)
+    portfolio_summary : portfolio NAV + positions snapshot (optional)
     """
     if not webhook_url:
         logger.warning("Feishu webhook URL not configured.")
         return False
 
     date = date or datetime.today().strftime("%Y-%m-%d")
-    payload = _build_signal_card(date, symbol_signals, vix_value, trades=trades)
+    payload = _build_signal_card(
+        date, symbol_signals, vix_value,
+        trades=trades, portfolio_summary=portfolio_summary,
+    )
 
     try:
         resp = httpx.post(webhook_url, json=payload, timeout=10)

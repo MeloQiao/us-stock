@@ -2,27 +2,37 @@ name: Daily Signal Pipeline
 
 on:
   schedule:
-    # 21:30 UTC = 16:30 ET (冬令时 EST) / 17:30 ET (夏令时 EDT)
-    # 美股收盘后，data 已经 settled，策略信号准确
+    # US  — 21:30 UTC = 16:30 ET (美股收盘后)
     - cron: '30 21 * * 1-5'
-  workflow_dispatch:  # 允许手动触发，方便测试
+    # HK  — 08:30 UTC = 16:30 HKT (港股收盘后)
+    - cron: '30 8 * * 1-5'
+    # CN  — 07:30 UTC = 15:30 CST (A股收盘后)
+    - cron: '30 7 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      market:
+        description: 'Market to run (us / hk / cn / all)'
+        required: false
+        default: 'all'
 
 jobs:
-  pipeline:
+  us-pipeline:
+    name: US Market Pipeline
     runs-on: ubuntu-latest
-
+    # Run on schedule (cron index 0 = 21:30 UTC) or manual trigger
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      (github.event.inputs.market == 'us' || github.event.inputs.market == 'all') ||
+      github.event_name == 'schedule' && startsWith(github.event.schedule, '30 21')
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-
       - name: Install dependencies
         run: pip install -r requirements.txt
-
-      - name: Run US market pipeline
+      - name: Run US pipeline
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
@@ -34,6 +44,68 @@ jobs:
           import json
           from scheduler.jobs import run_daily_pipeline
           result = run_daily_pipeline('us')
+          print(json.dumps(result, indent=2, default=str))
+          if result['errors']:
+              print('ERRORS:', result['errors'])
+              exit(1)
+          "
+
+  hk-pipeline:
+    name: HK Market Pipeline
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      (github.event.inputs.market == 'hk' || github.event.inputs.market == 'all') ||
+      github.event_name == 'schedule' && startsWith(github.event.schedule, '30 8')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run HK pipeline
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          python -c "
+          import json
+          from scheduler.jobs import run_daily_pipeline
+          result = run_daily_pipeline('hk')
+          print(json.dumps(result, indent=2, default=str))
+          if result['errors']:
+              print('ERRORS:', result['errors'])
+              exit(1)
+          "
+
+  cn-pipeline:
+    name: CN Market Pipeline
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      (github.event.inputs.market == 'cn' || github.event.inputs.market == 'all') ||
+      github.event_name == 'schedule' && startsWith(github.event.schedule, '30 7')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run CN pipeline
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          python -c "
+          import json
+          from scheduler.jobs import run_daily_pipeline
+          result = run_daily_pipeline('cn')
           print(json.dumps(result, indent=2, default=str))
           if result['errors']:
               print('ERRORS:', result['errors'])
