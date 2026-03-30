@@ -185,28 +185,59 @@ def _build_signal_card(
             "text": {"tag": "lark_md", "content": "**📋 次日开盘纸交易挂单**"},
         })
 
-        buy_orders = [t for t in trades if t.get("action") == "enter_long"]
-        exit_orders = [t for t in trades if t.get("action") == "exit"]
+        buy_orders     = [t for t in trades if t.get("action") in ("enter_long", "buy")]
+        exit_orders    = [t for t in trades if t.get("action") == "exit"]
+        sell_orders    = [t for t in trades if t.get("action") == "sell"]
+        filtered_orders= [t for t in trades if t.get("action") == "filtered"]
 
-        rows = ["| 方向 | 标的 | 参考价 | 估算股数 | 金额 (USD) | 评分 |",
-                "|------|------|--------|---------|-----------|------|"]
+        currency_sym = "¥" if market == "cn" else ("HK$" if market == "hk" else "$")
+        rows = ["| 方向 | 标的 | 参考价 | 估算股数 | 金额 | 评分 |",
+                "|------|------|--------|---------|------|------|"]
         for t in buy_orders:
             notional = t.get("notional") or 0
             score = t.get("score", "—")
-            ref_price = t.get("ref_price")
-            est_shares = t.get("est_shares")
-            price_str = f"${ref_price:,.2f}" if ref_price else "—"
+            ref_price = t.get("ref_price") or t.get("price")
+            est_shares = t.get("est_shares") or t.get("shares")
+            sym = t["symbol"]
+            name = SYMBOL_NAMES.get(sym, "")
+            display = f"{sym} {name}" if name else sym
+            price_str = f"{currency_sym}{ref_price:,.2f}" if ref_price else "—"
             shares_str = str(est_shares) if est_shares else "—"
-            rows.append(f"| 🟢 买入 | {t['symbol']} | {price_str} | {shares_str} | ${notional:,.0f} | {score} |")
-        for t in exit_orders:
-            rows.append(f"| 🔴 平仓 | {t['symbol']} | — | — | — | — |")
-        if not buy_orders and not exit_orders:
-            rows.append("| — | 无新挂单 | — | — |")
+            rows.append(f"| 🟢 买入 | {display} | {price_str} | {shares_str} | {currency_sym}{notional:,.0f} | {score} |")
+        for t in (exit_orders + sell_orders):
+            sym = t["symbol"]
+            name = SYMBOL_NAMES.get(sym, "")
+            display = f"{sym} {name}" if name else sym
+            pnl = t.get("pnl")
+            pnl_str = f"{currency_sym}{pnl:+,.0f}" if pnl is not None else "—"
+            rows.append(f"| 🔴 平仓 | {display} | — | — | {pnl_str} | — |")
+        if not buy_orders and not exit_orders and not sell_orders:
+            rows.append("| — | 无新挂单 | — | — | — | — |")
 
         elements.append({
             "tag": "div",
             "text": {"tag": "lark_md", "content": "\n".join(rows)},
         })
+
+        # Show which BUY signals were filtered out by portfolio optimizer
+        if filtered_orders:
+            filtered_names = []
+            for t in filtered_orders:
+                sym = t["symbol"]
+                name = SYMBOL_NAMES.get(sym, "")
+                filtered_names.append(f"{sym} {name}" if name else sym)
+            elements.append({
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        "⚠️ **组合优化过滤**（有BUY信号但未下单）：" +
+                        "、".join(filtered_names) +
+                        "\n_原因：相关性去重或行业集中度超限_"
+                    ),
+                },
+            })
+
         elements.append({"tag": "hr"})
 
     # ── Footer ────────────────────────────────────────────────────────────

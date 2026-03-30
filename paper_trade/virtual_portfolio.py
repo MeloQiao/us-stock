@@ -182,10 +182,26 @@ class VirtualPortfolio:
 
             if weights:
                 sub_w = {s: weights[s] for s in new_buys if s in weights}
+                # Log any BUY signals that were filtered out by the portfolio optimizer
+                filtered_out = [s for s in new_buys if s not in sub_w]
+                for s in filtered_out:
+                    logger.info(
+                        "[%s] %s had BUY signal but was filtered by portfolio optimizer "
+                        "(corr dedup or sector cap) — no order placed", self.market, s
+                    )
+                    results.append({
+                        "symbol": s, "action": "filtered",
+                        "reason": "portfolio_optimizer",
+                        "currency": self.currency,
+                    })
                 if not sub_w:
+                    # All symbols filtered — fall back to equal weight
                     sub_w = {s: 1 / len(new_buys) for s in new_buys}
-                total_w = sum(sub_w.values())
-                raw_weights = {s: sub_w[s] / total_w for s in new_buys if s in sub_w}
+                    filtered_out = []  # reset since we're now using all
+                    raw_weights = sub_w
+                else:
+                    total_w = sum(sub_w.values())
+                    raw_weights = {s: sub_w[s] / total_w for s in sub_w}
                 new_buys = list(raw_weights.keys())
             else:
                 raw_weights_raw = {sym: max(scores.get(sym, 1), 1) for sym in new_buys}

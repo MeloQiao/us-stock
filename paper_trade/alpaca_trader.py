@@ -211,10 +211,21 @@ def execute_signals(
         # Use pre-computed optimizer weights (only for symbols in new_buys)
         # Renormalize to the subset that are actual new buys
         sub_w = {s: weights[s] for s in new_buys if s in weights}
+        # Log symbols with BUY signal that were filtered out by portfolio optimizer
+        filtered_out = [s for s in new_buys if s not in sub_w]
+        for s in filtered_out:
+            logger.info(
+                "[us] %s had BUY signal but was filtered by portfolio optimizer "
+                "(corr dedup or sector cap) — no order placed", s
+            )
+            results.append({"symbol": s, "action": "filtered",
+                             "reason": "portfolio_optimizer"})
         if not sub_w:
             sub_w = {s: 1 / len(new_buys) for s in new_buys}
+            filtered_out = []
         total_w = sum(sub_w.values())
         notionals = {s: budget * (sub_w[s] / total_w) for s in sub_w}
+        new_buys = list(sub_w.keys())  # only attempt orders for non-filtered symbols
     elif scores:
         raw = {s: max(scores.get(s, 1), 1) for s in new_buys}
         total_w = sum(raw.values())
