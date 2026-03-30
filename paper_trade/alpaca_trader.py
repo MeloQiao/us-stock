@@ -165,6 +165,7 @@ def close_position(symbol: str) -> Optional[dict]:
 def execute_signals(
     signals: dict[str, int],
     scores: Optional[dict[str, int]] = None,
+    weights: Optional[dict[str, float]] = None,
     position_size: float = PAPER_TRADE_POSITION_SIZE,
 ) -> list[dict]:
     """
@@ -173,15 +174,10 @@ def execute_signals(
     Parameters
     ----------
     signals : {symbol: signal}  1=buy, -1=sell/exit, 0=hold
-    scores  : {symbol: total_score}  composite score for each symbol.
-              If provided, new buy positions are sized proportionally to score.
-              If None, falls back to equal-weight allocation.
-
-    Allocation logic (score-weighted):
-      - new_buys = symbols with signal==1 and no existing position
-      - weight_i = score_i / sum(scores of new_buys)
-      - notional_i = portfolio_value * weight_i
-      - capped so total <= buying_power
+    scores  : {symbol: total_score}  used for score-weighted fallback.
+    weights : {symbol: fraction}  pre-computed portfolio weights (from optimizer).
+              If provided, notional = portfolio_value * weight[symbol].
+              If None, falls back to score-proportional then equal-weight.
     """
     account = get_account()
     if not account:
@@ -189,9 +185,9 @@ def execute_signals(
         return []
 
     portfolio_value = account["portfolio_value"]
-    buying_power = account["buying_power"]
-    positions = {p["symbol"]: p for p in get_positions()}
-    results = []
+    buying_power    = account["buying_power"]
+    positions       = {p["symbol"]: p for p in get_positions()}
+    results         = []
 
     # ── 1. Exits first ────────────────────────────────────────────────────
     for symbol, signal in signals.items():
@@ -203,40 +199,50 @@ def execute_signals(
             except Exception as e:
                 logger.error("Exit error for %s: %s", symbol, e)
 
-    # ── 2. Score-weighted (or equal-weight) entries ───────────────────────
+    # ── 2. Entries ────────────────────────────────────────────────────────
     new_buys = [sym for sym, sig in signals.items() if sig == 1 and sym not in positions]
     if not new_buys:
         return results
 
-    if scores:
-        raw_weights = {sym: max(scores.get(sym, 1), 1) for sym in new_buys}
-    else:
-        raw_weights = {sym: 1 for sym in new_buys}
-
-    total_weight = sum(raw_weights.values())
     budget = min(portfolio_value, buying_power)
 
+    # Determine per-symbol notional
+    if weights:
+        # Use pre-computed optimizer weights (only for symbols in new_buys)
+        # Renormalize to the subset that are actual new buys
+        sub_w = {s: weights[s] for s in new_buys if s in weights}
+        if not sub_w:
+            sub_w = {s: 1 / len(new_buys) for s in new_buys}
+        total_w = sum(sub_w.values())
+        notionals = {s: budget * (sub_w[s] / total_w) for s in sub_w}
+    elif scores:
+        raw = {s: max(scores.get(s, 1), 1) for s in new_buys}
+        total_w = sum(raw.values())
+        notionals = {s: budget * (raw[s] / total_w) for s in new_buys}
+    else:
+        notionals = {s: budget / len(new_buys) for s in new_buys}
+
     # Fetch current prices for share estimation (best-effort)
-    prices: dict[str, float] = {}
+    price_map: dict[str, float] = {}
     for symbol in new_buys:
         try:
             import yfinance as yf
-            prices[symbol] = yf.Ticker(symbol).fast_info.last_price or 0.0
+            price_map[symbol] = yf.Ticker(symbol).fast_info.last_price or 0.0
         except Exception:
-            prices[symbol] = 0.0
+            price_map[symbol] = 0.0
 
     for symbol in new_buys:
-        notional = budget * (raw_weights[symbol] / total_weight)
+        notional = notionals.get(symbol, 0)
         try:
             if notional < 1:
                 logger.warning("Notional too small for %s (%.2f), skipping.", symbol, notional)
                 continue
-            price = prices.get(symbol, 0.0)
+            price      = price_map.get(symbol, 0.0)
             est_shares = round(notional / price, 4) if price > 0 else None
+            wt_pct     = (weights or {}).get(symbol, notional / budget) * 100
             logger.info(
-                "Score-weighted buy: %s score=%d weight=%.1f%% notional=%.2f est_shares=%s",
-                symbol, raw_weights[symbol],
-                raw_weights[symbol] / total_weight * 100, notional, est_shares,
+                "Buy: %s weight=%.1f%% notional=%.2f est_shares=%s",
+                symbol, wt_pct, notional, est_shares,
             )
             order = place_market_order(symbol, "buy", notional=notional)
             if order:
@@ -244,7 +250,7 @@ def execute_signals(
                     **order,
                     "action": "enter_long",
                     "notional": notional,
-                    "score": raw_weights[symbol],
+                    "score": (scores or {}).get(symbol, "—"),
                     "est_shares": est_shares,
                     "ref_price": round(price, 2) if price > 0 else None,
                 })

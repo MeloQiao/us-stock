@@ -106,6 +106,12 @@ def run_daily_pipeline(market: Market = "us") -> dict:
         vix_data = fetch_multiple(["^VIX"], years=HISTORY_YEARS, market="us", force_refresh=False)
         vix_df = vix_data.get("^VIX")
 
+    # ── 1b. Regime detection ──────────────────────────────────────────
+    from strategies.regime import detect_regime, apply_regime_gate
+    regime_info = detect_regime(market=market, price_data=data)
+    summary["regime"] = regime_info.get("regime")
+    logger.info("[%s] Regime: %s — %s", market, regime_info["regime"], regime_info["reason"])
+
     # ── 2. Strategy signals ───────────────────────────────────────────
     from strategies.composite import run_all_strategies
     from strategies import STRATEGY_LABELS
@@ -133,6 +139,31 @@ def run_daily_pipeline(market: Market = "us") -> dict:
             logger.error("[%s] Strategy error for %s: %s", market, symbol, e)
             summary["errors"].append(f"Strategy failed {symbol}: {e}")
 
+    # Apply regime gate — blocks new buys in bear market
+    gated_signals = apply_regime_gate(composite_signals, regime_info)
+
+    # ── 2b. Portfolio optimization ────────────────────────────────────
+    from portfolio.optimizer import optimize_portfolio
+    buy_candidates = {
+        sym: composite_scores[sym]
+        for sym, sig in gated_signals.items()
+        if sig == 1
+    }
+    portfolio_weights: dict[str, float] = {}
+    if buy_candidates:
+        try:
+            portfolio_weights = optimize_portfolio(
+                buy_signals=buy_candidates,
+                price_data=data,
+                market=market,
+                method="risk_parity",   # risk_parity is robust; max_sharpe needs scipy
+            )
+            summary["portfolio_weights"] = portfolio_weights
+            logger.info("[%s] Portfolio weights: %s", market,
+                        {s: f"{w:.1%}" for s, w in portfolio_weights.items()})
+        except Exception as e:
+            logger.warning("[%s] Portfolio optimisation failed: %s — using score weights", market, e)
+
     # ── 3. Paper / virtual trade ──────────────────────────────────────
     trade_results: list = []
     portfolio_summary: dict = {}
@@ -143,7 +174,11 @@ def run_daily_pipeline(market: Market = "us") -> dict:
     if market == "us" and ALPACA_API_KEY:
         try:
             from paper_trade.alpaca_trader import execute_signals, get_portfolio_summary
-            trade_results = execute_signals(composite_signals, scores=composite_scores)
+            trade_results = execute_signals(
+                gated_signals,
+                scores=composite_scores,
+                weights=portfolio_weights if portfolio_weights else None,
+            )
             summary["trades"] = trade_results
             portfolio_summary = get_portfolio_summary()
             logger.info("[us] Paper trades: %d orders", len(trade_results))
@@ -162,7 +197,10 @@ def run_daily_pipeline(market: Market = "us") -> dict:
                 hf_token=HF_TOKEN,
             )
             trade_results = vp.execute_signals(
-                composite_signals, scores=composite_scores, prices=prices,
+                gated_signals,
+                scores=composite_scores,
+                prices=prices,
+                weights=portfolio_weights if portfolio_weights else None,
             )
             portfolio_summary = vp.get_summary(prices=prices)
             summary["trades"] = trade_results
@@ -186,6 +224,7 @@ def run_daily_pipeline(market: Market = "us") -> dict:
                 trades=trade_results if trade_results else None,
                 portfolio_summary=portfolio_summary if portfolio_summary else None,
                 market=market,
+                regime_info=regime_info,
             )
             summary["feishu_sent"] = ok
         except Exception as e:
@@ -218,6 +257,31 @@ def run_daily_pipeline(market: Market = "us") -> dict:
         except Exception as e:
             logger.error("[%s] HF persist failed: %s", market, e)
             summary["errors"].append(f"HF persist failed: {e}")
+
+    # ── 5b. Forward-return tracking ───────────────────────────────────
+    if HF_TOKEN and HF_DATASET_REPO and all_results:
+        try:
+            from data.forward_returns import record_today, backfill
+            record_today(
+                market=market,
+                all_results=all_results,
+                composite_scores=composite_scores,
+                prices=prices,
+                regime=regime_info.get("regime", "unknown"),
+                date=summary["date"],
+                hf_repo=HF_DATASET_REPO,
+                hf_token=HF_TOKEN,
+            )
+            filled = backfill(
+                market=market,
+                price_data=data,
+                hf_repo=HF_DATASET_REPO,
+                hf_token=HF_TOKEN,
+            )
+            summary["forward_return_cells_filled"] = filled
+        except Exception as e:
+            logger.warning("[%s] Forward-return tracking failed: %s", market, e)
+            summary["errors"].append(f"Forward returns failed: {e}")
 
     logger.info("=== Pipeline [%s] done. Errors: %d ===", market, len(summary["errors"]))
     return summary

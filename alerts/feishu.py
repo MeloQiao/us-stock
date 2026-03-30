@@ -82,6 +82,7 @@ def _build_signal_card(
     trades: Optional[list[dict]] = None,
     portfolio_summary: Optional[dict] = None,
     market: str = "us",
+    regime_info: Optional[dict] = None,
 ) -> dict:
     """
     Build a Feishu interactive card payload.
@@ -102,6 +103,29 @@ def _build_signal_card(
     }
 
     elements = []
+
+    # ── Regime banner ─────────────────────────────────────────────────────
+    if regime_info:
+        sub   = regime_info.get("sub_state", regime_info.get("regime", "unknown"))
+        emoji = {"bull_strong": "🟢", "bull_caution": "🟡", "bear": "🔴"}.get(sub, "⚪")
+        label = {"bull_strong": "牛市强势", "bull_caution": "牛市承压", "bear": "熊市"}.get(sub, "未知")
+        bmark = regime_info.get("benchmark", "—")
+        price = regime_info.get("price")
+        ma200 = regime_info.get("ma200")
+        price_str = f"{price:.2f}" if price else "—"
+        ma200_str = f"{ma200:.2f}" if ma200 else "—"
+        elements.append({
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": (
+                    f"**市场机制**: {emoji} {label}  "
+                    f"|  {bmark} {price_str} vs MA200 {ma200_str}"
+                    + ("  |  ⚠️ **熊市：已屏蔽新买入信号**" if sub == "bear" else "")
+                ),
+            },
+        })
+        elements.append({"tag": "hr"})
 
     # ── VIX banner ────────────────────────────────────────────────────────
     if vix_value is not None:
@@ -211,6 +235,7 @@ def send_signal_alert(
     trades: Optional[list[dict]] = None,
     portfolio_summary: Optional[dict] = None,
     market: str = "us",
+    regime_info: Optional[dict] = None,
 ) -> bool:
     """
     Send strategy signal alert to Feishu group via webhook.
@@ -232,7 +257,7 @@ def send_signal_alert(
     payload = _build_signal_card(
         date, symbol_signals, vix_value,
         trades=trades, portfolio_summary=portfolio_summary,
-        market=market,
+        market=market, regime_info=regime_info,
     )
 
     try:

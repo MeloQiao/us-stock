@@ -121,6 +121,7 @@ class VirtualPortfolio:
         signals: dict[str, int],
         scores: dict[str, int],
         prices: dict[str, float],
+        weights: Optional[dict[str, float]] = None,
         date: Optional[str] = None,
     ) -> list[dict]:
         """
@@ -177,12 +178,22 @@ class VirtualPortfolio:
         ]
 
         if new_buys and self.available_capital > 0:
-            raw_weights = {sym: max(scores.get(sym, 1), 1) for sym in new_buys}
-            total_w = sum(raw_weights.values())
-            budget = self.available_capital  # only spend what's available
+            budget = self.available_capital
+
+            if weights:
+                sub_w = {s: weights[s] for s in new_buys if s in weights}
+                if not sub_w:
+                    sub_w = {s: 1 / len(new_buys) for s in new_buys}
+                total_w = sum(sub_w.values())
+                raw_weights = {s: sub_w[s] / total_w for s in new_buys if s in sub_w}
+                new_buys = list(raw_weights.keys())
+            else:
+                raw_weights_raw = {sym: max(scores.get(sym, 1), 1) for sym in new_buys}
+                total_w = sum(raw_weights_raw.values())
+                raw_weights = {s: raw_weights_raw[s] / total_w for s in new_buys}
 
             for symbol in new_buys:
-                notional = budget * (raw_weights[symbol] / total_w)
+                notional = budget * raw_weights[symbol]
                 price = prices.get(symbol, 0.0)
                 if notional < 1 or price <= 0:
                     logger.warning("[%s] Skip %s notional=%.2f price=%.4f",
@@ -190,7 +201,7 @@ class VirtualPortfolio:
                     continue
 
                 shares = round(notional / price, 4)
-                score = raw_weights[symbol]
+                score = scores.get(symbol, raw_weights[symbol])
                 trade = {
                     "date": date, "symbol": symbol, "action": "buy",
                     "price": price, "shares": shares,
