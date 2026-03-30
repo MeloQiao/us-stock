@@ -107,6 +107,7 @@ def run_daily_pipeline(market: Market = "us") -> dict:
             summary["errors"].append(f"Strategy failed {symbol}: {e}")
 
     # ── 3. Paper trade (US only, Alpaca) ──────────────────────────────
+    trade_results: list = []
     if market == "us" and ALPACA_API_KEY:
         try:
             from paper_trade.alpaca_trader import execute_signals
@@ -126,7 +127,11 @@ def run_daily_pipeline(market: Market = "us") -> dict:
                 vix_value = float(vix_df["Close"].iloc[-1])
 
             signal_list = build_signal_list(all_results, STRATEGY_LABELS)
-            ok = send_signal_alert(FEISHU_WEBHOOK_URL, signal_list, vix_value=vix_value)
+            ok = send_signal_alert(
+                FEISHU_WEBHOOK_URL, signal_list,
+                vix_value=vix_value,
+                trades=trade_results if trade_results else None,
+            )
             summary["feishu_sent"] = ok
         except Exception as e:
             logger.error("[%s] Feishu alert failed: %s", market, e)

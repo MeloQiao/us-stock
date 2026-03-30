@@ -21,12 +21,16 @@ def _build_signal_card(
     date: str,
     symbol_signals: list[dict],
     vix_value: Optional[float] = None,
+    trades: Optional[list[dict]] = None,
 ) -> dict:
     """
     Build a Feishu interactive card payload.
-    symbol_signals: list of {symbol, strategy, signal, score_breakdown (optional)}
+
+    symbol_signals : list of {symbol, strategy, strategy_label, signal,
+                               total_score, max_possible}
+    trades         : list of executed paper trade orders (optional),
+                     each containing {action, symbol, notional, score}
     """
-    # Header
     header = {
         "template": "blue",
         "title": {
@@ -37,9 +41,8 @@ def _build_signal_card(
 
     elements = []
 
-    # VIX banner
+    # ── VIX banner ────────────────────────────────────────────────────────
     if vix_value is not None:
-        vix_color = "red" if vix_value > 30 else ("green" if vix_value < 15 else "yellow")
         vix_label = "恐慌" if vix_value > 30 else ("贪婪" if vix_value < 15 else "中性")
         elements.append({
             "tag": "div",
@@ -50,14 +53,12 @@ def _build_signal_card(
         })
         elements.append({"tag": "hr"})
 
-    # Group signals by symbol
+    # ── Per-symbol signal breakdown ───────────────────────────────────────
     symbol_map: dict[str, list[dict]] = {}
     for item in symbol_signals:
-        sym = item["symbol"]
-        symbol_map.setdefault(sym, []).append(item)
+        symbol_map.setdefault(item["symbol"], []).append(item)
 
     for symbol, items in symbol_map.items():
-        # Composite signal for this symbol
         composite = next((i for i in items if i["strategy"] == "composite_score"), None)
         headline_signal = composite["signal"] if composite else 0
         emoji = SIGNAL_EMOJI[headline_signal]
@@ -72,22 +73,46 @@ def _build_signal_card(
             },
         })
 
-        # Individual strategy breakdown
-        rows = [f"| 策略 | 信号 |", "|------|------|"]
+        rows = ["| 策略 | 信号 |", "|------|------|"]
         for item in items:
             if item["strategy"] == "composite_score":
                 continue
-            rows.append(f"| {item['strategy_label']} | {SIGNAL_EMOJI[item['signal']]} {SIGNAL_TEXT[item['signal']]} |")
+            rows.append(
+                f"| {item['strategy_label']} | {SIGNAL_EMOJI[item['signal']]} {SIGNAL_TEXT[item['signal']]} |"
+            )
         elements.append({
             "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": "\n".join(rows),
-            },
+            "text": {"tag": "lark_md", "content": "\n".join(rows)},
         })
         elements.append({"tag": "hr"})
 
-    # Footer
+    # ── Paper trade orders ────────────────────────────────────────────────
+    if trades is not None:
+        elements.append({
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": "**📋 次日开盘纸交易挂单**"},
+        })
+
+        buy_orders = [t for t in trades if t.get("action") == "enter_long"]
+        exit_orders = [t for t in trades if t.get("action") == "exit"]
+
+        rows = ["| 方向 | 标的 | 金额 (USD) | 评分 |", "|------|------|-----------|------|"]
+        for t in buy_orders:
+            notional = t.get("notional") or 0
+            score = t.get("score", "—")
+            rows.append(f"| 🟢 买入 | {t['symbol']} | ${notional:,.0f} | {score} |")
+        for t in exit_orders:
+            rows.append(f"| 🔴 平仓 | {t['symbol']} | — | — |")
+        if not buy_orders and not exit_orders:
+            rows.append("| — | 无新挂单 | — | — |")
+
+        elements.append({
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": "\n".join(rows)},
+        })
+        elements.append({"tag": "hr"})
+
+    # ── Footer ────────────────────────────────────────────────────────────
     elements.append({
         "tag": "note",
         "elements": [{
@@ -110,26 +135,25 @@ def send_signal_alert(
     symbol_signals: list[dict],
     vix_value: Optional[float] = None,
     date: Optional[str] = None,
+    trades: Optional[list[dict]] = None,
 ) -> bool:
     """
     Send strategy signal alert to Feishu group via webhook.
 
     Parameters
     ----------
-    webhook_url : Feishu custom bot webhook URL
-    symbol_signals : list of signal dicts, each containing:
-        {symbol, strategy, strategy_label, signal, total_score, max_possible}
-    vix_value : current VIX level (optional)
-    date : date string, defaults to today
-
-    Returns True on success.
+    webhook_url    : Feishu custom bot webhook URL
+    symbol_signals : list of signal dicts
+    vix_value      : current VIX level (optional)
+    date           : date string, defaults to today
+    trades         : paper trade orders to include in the card (optional)
     """
     if not webhook_url:
         logger.warning("Feishu webhook URL not configured.")
         return False
 
     date = date or datetime.today().strftime("%Y-%m-%d")
-    payload = _build_signal_card(date, symbol_signals, vix_value)
+    payload = _build_signal_card(date, symbol_signals, vix_value, trades=trades)
 
     try:
         resp = httpx.post(webhook_url, json=payload, timeout=10)
@@ -151,7 +175,6 @@ def send_text_message(webhook_url: str, text: str) -> bool:
     if not webhook_url:
         return False
     try:
-        # Ensure keyword filter is satisfied
         if "Stock" not in text and "Hugging Face" not in text:
             text = f"[US Stock Monitor] {text}"
         payload = {"msg_type": "text", "content": {"text": text}}
@@ -169,8 +192,8 @@ def build_signal_list(all_results: dict[str, dict], strategy_labels: dict) -> li
 
     Parameters
     ----------
-    all_results : {symbol: {strategy_name: result_dict}}
-    strategy_labels : {strategy_name: display_label}
+    all_results    : {symbol: {strategy_name: result_dict}}
+    strategy_labels: {strategy_name: display_label}
     """
     items = []
     for symbol, strategies in all_results.items():
