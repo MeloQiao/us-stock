@@ -112,6 +112,16 @@ def run_daily_pipeline(market: Market = "us") -> dict:
     summary["regime"] = regime_info.get("regime")
     logger.info("[%s] Regime: %s — %s", market, regime_info["regime"], regime_info["reason"])
 
+    # ── 1c. Load regime-specific strategy weights (from walk-forward optimizer) ─
+    from strategies.walk_forward_optimizer import get_regime_weights
+    strategy_weights = get_regime_weights(
+        market=market,
+        regime=regime_info.get("sub_state", "bull_caution"),
+        hf_repo=HF_DATASET_REPO if HF_TOKEN else None,
+        hf_token=HF_TOKEN if HF_TOKEN else None,
+    )
+    summary["strategy_weights_regime"] = regime_info.get("sub_state", "equal")
+
     # ── 2. Strategy signals ───────────────────────────────────────────
     from strategies.composite import run_all_strategies
     from strategies import STRATEGY_LABELS
@@ -125,7 +135,10 @@ def run_daily_pipeline(market: Market = "us") -> dict:
             summary["errors"].append(f"No data for {symbol}")
             continue
         try:
-            results = run_all_strategies(data[symbol], symbol=symbol, vix_df=vix_df)
+            results = run_all_strategies(
+                data[symbol], symbol=symbol, vix_df=vix_df,
+                weights=strategy_weights,
+            )
             all_results[symbol] = results
             composite_signals[symbol] = results["composite_score"]["signal"]
             composite_scores[symbol] = results["composite_score"].get("total_score", 0)

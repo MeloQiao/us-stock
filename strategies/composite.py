@@ -20,19 +20,24 @@ def composite_score(
     vix_df: pd.DataFrame | None = None,
     buy_threshold: int = 6,
     sell_threshold: int = 4,
+    weights: dict | None = None,
 ) -> dict:
     """
     Aggregate all applicable strategies into a composite score.
 
-    Score = sum of (+1/-1/0) across applicable strategies.
+    Score = sum of (+1/-1/0) × weight across applicable strategies.
     Signal: +1 if score >= buy_threshold
             -1 if score <= -sell_threshold (i.e., <= -4 when 6+ bearish)
              0 otherwise
+
+    weights: regime-specific weights from walk_forward_optimizer. Falls back to
+             STRATEGY_WEIGHTS (all = 1) if None.
 
     Leveraged ETFs skip mean reversion strategies.
     """
     is_leveraged = symbol.upper() in LEVERAGED_ETFS
     p = STRATEGY_PARAMS
+    _weights = weights if weights is not None else STRATEGY_WEIGHTS
 
     strategy_results = {}
 
@@ -54,21 +59,21 @@ def composite_score(
     # Macro
     strategy_results["vix_timing"] = vix_timing(df, vix_df=vix_df, **p["vix"])
 
-    # Build score series (sum of all signal_series aligned to df.index)
+    # Build score series (sum of all signal_series × weight aligned to df.index)
     score_series = pd.Series(0.0, index=df.index)
     for name, result in strategy_results.items():
-        weight = STRATEGY_WEIGHTS.get(name, 1)
+        weight = _weights.get(name, 1)
         score_series += result["signal_series"].reindex(df.index, fill_value=0) * weight
 
-    max_possible = sum(STRATEGY_WEIGHTS.get(k, 1) for k in strategy_results)
+    max_possible = sum(_weights.get(k, 1) for k in strategy_results)
 
     signal = pd.Series(0, index=df.index)
     signal[score_series >= buy_threshold] = 1
     signal[score_series <= -sell_threshold] = -1
 
-    # Current bar summary
+    # Current bar summary (weighted)
     current_scores = {name: res["signal"] for name, res in strategy_results.items()}
-    total_score = sum(current_scores.values())
+    total_score = sum(sig * _weights.get(name, 1) for name, sig in current_scores.items())
 
     return {
         "signal": int(signal.iloc[-1]),
@@ -90,31 +95,39 @@ def run_all_strategies(
     df: pd.DataFrame,
     symbol: str = "",
     vix_df: pd.DataFrame | None = None,
+    weights: dict | None = None,
 ) -> dict:
     """
     Run all individual strategies + composite for a symbol.
+
+    Parameters
+    ----------
+    weights : regime-specific strategy weights from walk_forward_optimizer.
+              If None, falls back to equal weights (1.0 per strategy).
+
     Returns dict keyed by strategy name, each containing the strategy result dict.
     """
     is_leveraged = symbol.upper() in LEVERAGED_ETFS
     p = STRATEGY_PARAMS
 
     results = {}
-    results["golden_cross"] = golden_cross(df, **p["golden_cross"])
-    results["supertrend"] = supertrend(df, **p["supertrend"])
-    results["donchian_channel"] = donchian_channel(df, **p["donchian"])
-    results["ema_adx"] = ema_adx(df, **p["ema_adx"])
-    results["macd_crossover"] = macd_crossover(df, **p["macd"])
-    results["roc_momentum"] = roc_momentum(df, **p["roc"])
+    results["golden_cross"]    = golden_cross(df, **p["golden_cross"])
+    results["supertrend"]      = supertrend(df, **p["supertrend"])
+    results["donchian_channel"]= donchian_channel(df, **p["donchian"])
+    results["ema_adx"]         = ema_adx(df, **p["ema_adx"])
+    results["macd_crossover"]  = macd_crossover(df, **p["macd"])
+    results["roc_momentum"]    = roc_momentum(df, **p["roc"])
 
     if not is_leveraged:
-        results["rsi_strategy"] = rsi_strategy(df, **p["rsi"])
-        results["bollinger_squeeze"] = bollinger_squeeze(df, **p["bollinger"])
+        results["rsi_strategy"]     = rsi_strategy(df, **p["rsi"])
+        results["bollinger_squeeze"]= bollinger_squeeze(df, **p["bollinger"])
 
     results["vix_timing"] = vix_timing(df, vix_df=vix_df, **p["vix"])
     results["composite_score"] = composite_score(
         df, symbol=symbol, vix_df=vix_df,
         buy_threshold=p["composite"]["buy_threshold"],
         sell_threshold=p["composite"]["sell_threshold"],
+        weights=weights,
     )
 
     return results
