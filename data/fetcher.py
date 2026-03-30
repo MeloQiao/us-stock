@@ -47,38 +47,68 @@ def _is_cn_etf(symbol: str) -> bool:
     return symbol[:2] in {"51", "15", "16", "18", "56", "58", "12", "11"}
 
 
-def _fetch_akshare(symbol: str, start: str, end: str) -> pd.DataFrame:
-    """Fetch A-share / CN ETF history via akshare."""
-    import akshare as ak
+def _cn_to_yf_ticker(symbol: str) -> str:
+    """Map 6-digit CN code to yfinance ticker.
+    Shanghai: 6xx, 5xx, 9xx → .SS
+    Shenzhen: 0xx, 1xx, 2xx, 3xx, 7xx → .SZ
+    """
+    return f"{symbol}.SS" if symbol[0] in "569" else f"{symbol}.SZ"
 
-    # akshare date format: YYYYMMDD
-    s = start.replace("-", "")
-    e = end.replace("-", "")
 
-    if _is_cn_etf(symbol):
-        df = ak.fund_etf_hist_em(
-            symbol=symbol, period="daily",
-            start_date=s, end_date=e, adjust="qfq",
-        )
-    else:
-        df = ak.stock_zh_a_hist(
-            symbol=symbol, period="daily",
-            start_date=s, end_date=e, adjust="qfq",
-        )
+def _fetch_cn_via_yfinance(symbol: str, start: str, end: str) -> pd.DataFrame:
+    """Fallback: fetch CN stock/ETF via yfinance (.SS/.SZ suffix)."""
+    import yfinance as yf
 
+    yf_sym = _cn_to_yf_ticker(symbol)
+    df = yf.download(yf_sym, start=start, end=end, progress=False, auto_adjust=True)
     if df is None or df.empty:
-        raise ValueError(f"akshare returned no data for {symbol}")
+        raise ValueError(f"yfinance returned no data for {yf_sym}")
+    df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+    df.index = pd.to_datetime(df.index).tz_localize(None)
+    df.index.name = "Date"
+    return df[["Open", "High", "Low", "Close", "Volume"]].copy()
 
-    # Column mapping (akshare returns Chinese headers)
-    col_map = {
-        "日期": "Date", "开盘": "Open", "最高": "High",
-        "最低": "Low", "收盘": "Close", "成交量": "Volume",
-    }
-    df = df.rename(columns=col_map)
-    df["Date"] = pd.to_datetime(df["Date"])
-    df = df.set_index("Date")
-    df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
-    return df
+
+def _fetch_akshare(symbol: str, start: str, end: str) -> pd.DataFrame:
+    """Fetch A-share / CN ETF history.
+    Primary: akshare (richer data, no suffix needed).
+    Fallback: yfinance (.SS/.SZ) — used when akshare is unreachable
+    (e.g. GitHub Actions US runners blocked by Chinese data providers).
+    """
+    try:
+        import akshare as ak
+
+        # akshare date format: YYYYMMDD
+        s = start.replace("-", "")
+        e = end.replace("-", "")
+
+        if _is_cn_etf(symbol):
+            df = ak.fund_etf_hist_em(
+                symbol=symbol, period="daily",
+                start_date=s, end_date=e, adjust="qfq",
+            )
+        else:
+            df = ak.stock_zh_a_hist(
+                symbol=symbol, period="daily",
+                start_date=s, end_date=e, adjust="qfq",
+            )
+
+        if df is None or df.empty:
+            raise ValueError(f"akshare returned no data for {symbol}")
+
+        # Column mapping (akshare returns Chinese headers)
+        col_map = {
+            "日期": "Date", "开盘": "Open", "最高": "High",
+            "最低": "Low", "收盘": "Close", "成交量": "Volume",
+        }
+        df = df.rename(columns=col_map)
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.set_index("Date")
+        return df[["Open", "High", "Low", "Close", "Volume"]].copy()
+
+    except Exception as ak_err:
+        logger.warning("akshare failed for %s (%s), falling back to yfinance.", symbol, ak_err)
+        return _fetch_cn_via_yfinance(symbol, start, end)
 
 
 # ════════════════════════════════════════════════════════════════════════
