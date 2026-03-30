@@ -81,8 +81,8 @@ def get_quotes(symbols: list[str], market: str = "us") -> list[dict]:
             change_pct = change / prev["Close"] * 100 if prev["Close"] else 0.0
             results.append({
                 "symbol": sym,
-                "price": round(float(last["Close"]), 4),
-                "change": round(float(change), 4),
+                "price": round(float(last["Close"]), 2),
+                "change": round(float(change), 2),
                 "change_pct": round(float(change_pct), 2),
                 "volume": float(last.get("Volume", 0)),
                 "timestamp": str(df.index[-1].date()),
@@ -210,8 +210,11 @@ def _render_market_section(market: str) -> None:
             return ""
 
     st.caption(f"信号来源: {source_label} · {market_status} · {len(quotes_df)} 个标的")
+    fmt = {"价格": "{:.2f}", "涨跌%": "{:.2f}"}
     st.dataframe(
-        display_df.style.applymap(color_change, subset=["涨跌%"]),
+        display_df.style
+            .format(fmt, na_rep="—")
+            .applymap(color_change, subset=["涨跌%"]),
         use_container_width=True,
         hide_index=True,
     )
