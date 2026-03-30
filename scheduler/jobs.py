@@ -36,6 +36,25 @@ logger = logging.getLogger(__name__)
 
 Market = Literal["us", "hk", "cn"]
 
+# exchange_calendars exchange IDs per market
+_EXCHANGE_ID = {"us": "XNYS", "hk": "XHKG", "cn": "XSHG"}
+
+
+def is_trading_day(market: Market, date: datetime | None = None) -> bool:
+    """
+    Return True if `date` (defaults to today) is a trading day for `market`.
+    Accounts for weekends and public holidays via exchange_calendars.
+    Falls back to True if the library is unavailable (fail-open).
+    """
+    try:
+        import exchange_calendars as xcals
+        cal = xcals.get_calendar(_EXCHANGE_ID[market])
+        check = (date or datetime.now()).strftime("%Y-%m-%d")
+        return cal.is_session(check)
+    except Exception as e:
+        logger.warning("Trading day check failed for [%s], assuming open: %s", market, e)
+        return True
+
 
 # ════════════════════════════════════════════════════════════════════════
 # Core pipeline (market-agnostic)
@@ -53,12 +72,18 @@ def run_daily_pipeline(market: Market = "us") -> dict:
     Returns a summary dict.
     """
     logger.info("=== Pipeline [%s] started at %s ===", market, datetime.now().isoformat())
+    today = datetime.today()
     summary: dict = {
         "market": market,
-        "date": datetime.today().strftime("%Y-%m-%d"),
+        "date": today.strftime("%Y-%m-%d"),
         "symbols": {},
         "errors": [],
     }
+
+    if not is_trading_day(market, today):
+        logger.info("[%s] Today is not a trading day, pipeline skipped.", market)
+        summary["skipped"] = "non-trading day"
+        return summary
 
     watchlist = MARKET_WATCHLISTS.get(market, {})
     symbols = [s for group in watchlist.values() for s in group]
