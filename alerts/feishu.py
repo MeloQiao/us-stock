@@ -96,13 +96,18 @@ def _build_signal_card(
         buy_orders = [t for t in trades if t.get("action") == "enter_long"]
         exit_orders = [t for t in trades if t.get("action") == "exit"]
 
-        rows = ["| 方向 | 标的 | 金额 (USD) | 评分 |", "|------|------|-----------|------|"]
+        rows = ["| 方向 | 标的 | 参考价 | 估算股数 | 金额 (USD) | 评分 |",
+                "|------|------|--------|---------|-----------|------|"]
         for t in buy_orders:
             notional = t.get("notional") or 0
             score = t.get("score", "—")
-            rows.append(f"| 🟢 买入 | {t['symbol']} | ${notional:,.0f} | {score} |")
+            ref_price = t.get("ref_price")
+            est_shares = t.get("est_shares")
+            price_str = f"${ref_price:,.2f}" if ref_price else "—"
+            shares_str = str(est_shares) if est_shares else "—"
+            rows.append(f"| 🟢 买入 | {t['symbol']} | {price_str} | {shares_str} | ${notional:,.0f} | {score} |")
         for t in exit_orders:
-            rows.append(f"| 🔴 平仓 | {t['symbol']} | — | — |")
+            rows.append(f"| 🔴 平仓 | {t['symbol']} | — | — | — | — |")
         if not buy_orders and not exit_orders:
             rows.append("| — | 无新挂单 | — | — |")
 

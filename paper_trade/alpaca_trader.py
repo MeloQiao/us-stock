@@ -214,8 +214,16 @@ def execute_signals(
         raw_weights = {sym: 1 for sym in new_buys}
 
     total_weight = sum(raw_weights.values())
-    # Scale so total allocation = min(portfolio_value, buying_power)
     budget = min(portfolio_value, buying_power)
+
+    # Fetch current prices for share estimation (best-effort)
+    prices: dict[str, float] = {}
+    for symbol in new_buys:
+        try:
+            import yfinance as yf
+            prices[symbol] = yf.Ticker(symbol).fast_info.last_price or 0.0
+        except Exception:
+            prices[symbol] = 0.0
 
     for symbol in new_buys:
         notional = budget * (raw_weights[symbol] / total_weight)
@@ -223,15 +231,23 @@ def execute_signals(
             if notional < 1:
                 logger.warning("Notional too small for %s (%.2f), skipping.", symbol, notional)
                 continue
+            price = prices.get(symbol, 0.0)
+            est_shares = round(notional / price, 4) if price > 0 else None
             logger.info(
-                "Score-weighted buy: %s score=%d weight=%.1f%% notional=%.2f",
+                "Score-weighted buy: %s score=%d weight=%.1f%% notional=%.2f est_shares=%s",
                 symbol, raw_weights[symbol],
-                raw_weights[symbol] / total_weight * 100, notional,
+                raw_weights[symbol] / total_weight * 100, notional, est_shares,
             )
             order = place_market_order(symbol, "buy", notional=notional)
             if order:
-                results.append({**order, "action": "enter_long", "notional": notional,
-                                 "score": raw_weights[symbol]})
+                results.append({
+                    **order,
+                    "action": "enter_long",
+                    "notional": notional,
+                    "score": raw_weights[symbol],
+                    "est_shares": est_shares,
+                    "ref_price": round(price, 2) if price > 0 else None,
+                })
         except Exception as e:
             logger.error("Buy error for %s: %s", symbol, e)
 
