@@ -320,15 +320,20 @@ def save_to_hf(df: pd.DataFrame, symbol: str, hf_repo: str, hf_token: str,
 
 def load_from_hf(symbol: str, hf_repo: str, hf_token: str,
                  market: Market = "us") -> Optional[pd.DataFrame]:
+    """Fetch OHLCV parquet directly from HF HTTP API (no local disk cache)."""
+    import requests as _requests
+
+    url = (
+        f"https://huggingface.co/datasets/{hf_repo}/resolve/main"
+        f"/data/{market}/{symbol}.parquet"
+    )
+    headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else {}
     try:
-        from huggingface_hub import hf_hub_download
-        path = hf_hub_download(
-            repo_id=hf_repo,
-            filename=f"data/{market}/{symbol}.parquet",
-            repo_type="dataset",
-            token=hf_token,
-        )
-        df = pd.read_parquet(path)
+        resp = _requests.get(url, headers=headers, timeout=20)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        df = pd.read_parquet(io.BytesIO(resp.content))
         df["Date"] = pd.to_datetime(df["Date"])
         return df.set_index("Date")
     except Exception as e:
@@ -344,19 +349,28 @@ def load_today_signals_from_hf(
 ) -> dict[str, dict[str, int]]:
     """
     Load today's pre-computed signals from HF Dataset.
+    Always fetches directly from HF HTTP API (bypasses hf_hub_download local
+    disk cache, which can return stale 'not found' results in long-running
+    Streamlit containers).
+
     Returns {symbol: {strategy_name: signal_int}} or {} if not found.
     """
+    import requests as _requests
+
     date = date or datetime.today().strftime("%Y%m%d")
+    url = (
+        f"https://huggingface.co/datasets/{hf_repo}/resolve/main"
+        f"/signals/{market}/signals_{date}.parquet"
+    )
+    headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else {}
+
     try:
-        from huggingface_hub import hf_hub_download
-        path = hf_hub_download(
-            repo_id=hf_repo,
-            filename=f"signals/{market}/signals_{date}.parquet",
-            repo_type="dataset",
-            token=hf_token,
-        )
-        df = pd.read_parquet(path)
-        # Pivot: {symbol: {strategy: signal}}
+        resp = _requests.get(url, headers=headers, timeout=15)
+        if resp.status_code == 404:
+            logger.debug("No HF signals for today [%s] (404): %s", market, url)
+            return {}
+        resp.raise_for_status()
+        df = pd.read_parquet(io.BytesIO(resp.content))
         result: dict[str, dict[str, int]] = {}
         for _, row in df.iterrows():
             sym = row["symbol"]
@@ -365,7 +379,7 @@ def load_today_signals_from_hf(
         logger.info("Loaded today's signals [%s] from HF Dataset (%d rows).", market, len(df))
         return result
     except Exception as e:
-        logger.debug("No HF signals for today [%s]: %s", market, e)
+        logger.warning("Failed to load HF signals [%s]: %s", market, e)
         return {}
 
 
