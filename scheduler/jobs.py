@@ -85,6 +85,7 @@ def run_daily_pipeline(market: Market = "us") -> dict:
 
     all_results: dict[str, dict] = {}
     composite_signals: dict[str, int] = {}
+    composite_scores: dict[str, int] = {}
 
     for symbol in symbols:
         if symbol not in data:
@@ -94,11 +95,13 @@ def run_daily_pipeline(market: Market = "us") -> dict:
             results = run_all_strategies(data[symbol], symbol=symbol, vix_df=vix_df)
             all_results[symbol] = results
             composite_signals[symbol] = results["composite_score"]["signal"]
+            composite_scores[symbol] = results["composite_score"].get("total_score", 0)
             summary["symbols"][symbol] = {
                 "composite_signal": composite_signals[symbol],
-                "total_score": results["composite_score"].get("total_score", 0),
+                "total_score": composite_scores[symbol],
             }
-            logger.info("[%s] %s → signal: %d", market, symbol, composite_signals[symbol])
+            logger.info("[%s] %s → signal: %d score: %d", market, symbol,
+                        composite_signals[symbol], composite_scores[symbol])
         except Exception as e:
             logger.error("[%s] Strategy error for %s: %s", market, symbol, e)
             summary["errors"].append(f"Strategy failed {symbol}: {e}")
@@ -107,7 +110,7 @@ def run_daily_pipeline(market: Market = "us") -> dict:
     if market == "us" and ALPACA_API_KEY:
         try:
             from paper_trade.alpaca_trader import execute_signals
-            trade_results = execute_signals(composite_signals)
+            trade_results = execute_signals(composite_signals, scores=composite_scores)
             summary["trades"] = trade_results
             logger.info("[us] Paper trades: %d orders", len(trade_results))
         except Exception as e:

@@ -164,6 +164,7 @@ def close_position(symbol: str) -> Optional[dict]:
 
 def execute_signals(
     signals: dict[str, int],
+    scores: Optional[dict[str, int]] = None,
     position_size: float = PAPER_TRADE_POSITION_SIZE,
 ) -> list[dict]:
     """
@@ -171,16 +172,16 @@ def execute_signals(
 
     Parameters
     ----------
-    signals : {symbol: signal} where signal is 1 (buy), -1 (sell/exit), 0 (hold)
-    position_size : unused — allocation is equal-weight across all buy signals.
-        Kept for backward compatibility.
+    signals : {symbol: signal}  1=buy, -1=sell/exit, 0=hold
+    scores  : {symbol: total_score}  composite score for each symbol.
+              If provided, new buy positions are sized proportionally to score.
+              If None, falls back to equal-weight allocation.
 
-    Allocation logic:
-      - Count all buy signals (signal == 1) that have no existing position.
-      - Divide total portfolio_value equally among them.
-      - Cap each order by available buying_power.
-
-    Returns list of executed order results.
+    Allocation logic (score-weighted):
+      - new_buys = symbols with signal==1 and no existing position
+      - weight_i = score_i / sum(scores of new_buys)
+      - notional_i = portfolio_value * weight_i
+      - capped so total <= buying_power
     """
     account = get_account()
     if not account:
@@ -192,7 +193,7 @@ def execute_signals(
     positions = {p["symbol"]: p for p in get_positions()}
     results = []
 
-    # ── 1. Exits first (free up capital before new entries) ───────────────
+    # ── 1. Exits first ────────────────────────────────────────────────────
     for symbol, signal in signals.items():
         if signal == -1 and symbol in positions:
             try:
@@ -202,30 +203,35 @@ def execute_signals(
             except Exception as e:
                 logger.error("Exit error for %s: %s", symbol, e)
 
-    # ── 2. Equal-weight entries ───────────────────────────────────────────
+    # ── 2. Score-weighted (or equal-weight) entries ───────────────────────
     new_buys = [sym for sym, sig in signals.items() if sig == 1 and sym not in positions]
-
     if not new_buys:
         return results
 
-    notional_per = portfolio_value / len(new_buys)
-    # Refresh buying_power after exits (approximate: use original + freed capital)
-    # Hard cap: never spend more than current buying_power in total
-    notional_per = min(notional_per, buying_power / len(new_buys))
+    if scores:
+        raw_weights = {sym: max(scores.get(sym, 1), 1) for sym in new_buys}
+    else:
+        raw_weights = {sym: 1 for sym in new_buys}
 
-    logger.info(
-        "Equal-weight buy: %d symbols, %.2f USD each (portfolio=%.2f)",
-        len(new_buys), notional_per, portfolio_value,
-    )
+    total_weight = sum(raw_weights.values())
+    # Scale so total allocation = min(portfolio_value, buying_power)
+    budget = min(portfolio_value, buying_power)
 
     for symbol in new_buys:
+        notional = budget * (raw_weights[symbol] / total_weight)
         try:
-            if notional_per < 1:
-                logger.warning("Notional too small for %s (%.2f), skipping.", symbol, notional_per)
+            if notional < 1:
+                logger.warning("Notional too small for %s (%.2f), skipping.", symbol, notional)
                 continue
-            order = place_market_order(symbol, "buy", notional=notional_per)
+            logger.info(
+                "Score-weighted buy: %s score=%d weight=%.1f%% notional=%.2f",
+                symbol, raw_weights[symbol],
+                raw_weights[symbol] / total_weight * 100, notional,
+            )
+            order = place_market_order(symbol, "buy", notional=notional)
             if order:
-                results.append({**order, "action": "enter_long", "notional": notional_per})
+                results.append({**order, "action": "enter_long", "notional": notional,
+                                 "score": raw_weights[symbol]})
         except Exception as e:
             logger.error("Buy error for %s: %s", symbol, e)
 

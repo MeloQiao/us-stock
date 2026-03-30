@@ -7,26 +7,11 @@ from __future__ import annotations
 
 import pandas as pd
 
-from config import LEVERAGED_ETFS, STRATEGY_PARAMS
+from config import LEVERAGED_ETFS, STRATEGY_PARAMS, STRATEGY_WEIGHTS
 from .trend import golden_cross, supertrend, donchian_channel, ema_adx
 from .momentum import macd_crossover, roc_momentum
 from .mean_reversion import rsi_strategy, bollinger_squeeze
 from .macro import vix_timing
-
-
-# Weight per strategy (total = 10 when all applicable)
-_WEIGHTS = {
-    "golden_cross":    1,
-    "supertrend":      1,
-    "donchian_channel":1,
-    "ema_adx":         1,
-    "macd_crossover":  1,
-    "roc_momentum":    1,
-    "rsi_strategy":    1,
-    "bollinger_squeeze":1,
-    "vix_timing":      1,
-    # composite itself is not weighted
-}
 
 
 def composite_score(
@@ -72,10 +57,10 @@ def composite_score(
     # Build score series (sum of all signal_series aligned to df.index)
     score_series = pd.Series(0.0, index=df.index)
     for name, result in strategy_results.items():
-        weight = _WEIGHTS.get(name, 1)
+        weight = STRATEGY_WEIGHTS.get(name, 1)
         score_series += result["signal_series"].reindex(df.index, fill_value=0) * weight
 
-    max_possible = sum(_WEIGHTS[k] for k in strategy_results)
+    max_possible = sum(STRATEGY_WEIGHTS.get(k, 1) for k in strategy_results)
 
     signal = pd.Series(0, index=df.index)
     signal[score_series >= buy_threshold] = 1

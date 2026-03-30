@@ -137,6 +137,22 @@ WATCHLIST = MARKET_WATCHLISTS["us"]
 # Includes HK 2x ETFs (07226 / 07500)
 LEVERAGED_ETFS = {"TQQQ", "SQQQ", "SPXL", "SOXL", "SOXS", "UVXY", "07226", "07552", "07500"}
 
+# ── Strategy weights (used by composite scoring) ─────────────────────────
+# Each strategy contributes its weight to the composite score.
+# Default: all equal (1). Increase a weight to give that strategy more influence.
+# Max possible score = sum of weights for applicable strategies.
+STRATEGY_WEIGHTS: dict[str, int] = {
+    "golden_cross":     1,   # trend: 50/200 MA cross
+    "supertrend":       1,   # trend: ATR-based
+    "donchian_channel": 1,   # trend: breakout
+    "ema_adx":          1,   # trend: EMA + ADX filter
+    "macd_crossover":   1,   # momentum: MACD signal line
+    "roc_momentum":     1,   # momentum: rate of change
+    "rsi_strategy":     1,   # mean reversion (skipped for leveraged)
+    "bollinger_squeeze":1,   # mean reversion (skipped for leveraged)
+    "vix_timing":       1,   # macro: VIX gate
+}
+
 # ── Strategy parameters ───────────────────────────────────────────────────
 STRATEGY_PARAMS = {
     "golden_cross": {"fast": 50, "slow": 200},
