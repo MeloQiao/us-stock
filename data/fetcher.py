@@ -85,12 +85,23 @@ def _fetch_akshare(symbol: str, start: str, end: str) -> pd.DataFrame:
 # Public API
 # ════════════════════════════════════════════════════════════════════════
 
-def _hf_data_is_fresh(df: pd.DataFrame, max_lag_days: int = 3) -> bool:
-    """Return True if the HF-cached DataFrame has data within max_lag_days of today."""
+def _hf_data_is_fresh(df: pd.DataFrame, market: str = "us") -> bool:
+    """
+    Return True if the HF-cached DataFrame already contains today's close.
+
+    We compare the last bar's date against 'today' in the market's local timezone.
+    Since pipelines run after close, the latest bar should equal today's date.
+    Falls back to a 1-day tolerance for timezone edge cases.
+    """
     if df is None or df.empty:
         return False
+    tz_map = {"us": "America/New_York", "hk": "Asia/Hong_Kong", "cn": "Asia/Shanghai"}
+    import pytz
+    tz = pytz.timezone(tz_map.get(market, "UTC"))
+    today_local = datetime.now(tz).date()
     last_date = df.index[-1]
-    return (datetime.today() - last_date).days <= max_lag_days
+    last_day = last_date.date() if hasattr(last_date, "date") else last_date
+    return last_day >= today_local
 
 
 def fetch_history(
@@ -121,7 +132,7 @@ def fetch_history(
     hf_repo  = os.getenv("HF_DATASET_REPO", "")
     if not force_refresh and hf_token and hf_repo:
         cached = load_from_hf(symbol, hf_repo, hf_token, market=market)
-        if _hf_data_is_fresh(cached):
+        if _hf_data_is_fresh(cached, market=market):
             logger.info("HF Dataset hit: %s [%s]", symbol, market)
             _cache[cache_key] = cached
             return cached

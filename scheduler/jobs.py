@@ -98,12 +98,12 @@ def run_daily_pipeline(market: Market = "us") -> dict:
     import pandas as pd
 
     logger.info("Fetching %d symbols for [%s]...", len(symbols), market)
-    data = fetch_multiple(symbols, years=HISTORY_YEARS, market=market, force_refresh=True)
+    data = fetch_multiple(symbols, years=HISTORY_YEARS, market=market, force_refresh=False)
 
     # VIX is only relevant for US market
     vix_df = None
     if market == "us":
-        vix_data = fetch_multiple(["^VIX"], years=HISTORY_YEARS, market="us", force_refresh=True)
+        vix_data = fetch_multiple(["^VIX"], years=HISTORY_YEARS, market="us", force_refresh=False)
         vix_df = vix_data.get("^VIX")
 
     # ── 2. Strategy signals ───────────────────────────────────────────
