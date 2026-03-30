@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from config import LEVERAGED_ETFS, STRATEGY_PARAMS, STRATEGY_WEIGHTS
+from config import LEVERAGED_ETFS, INVERSE_ETFS, STRATEGY_PARAMS, STRATEGY_WEIGHTS
 from .trend import golden_cross, supertrend, donchian_channel, ema_adx
 from .momentum import macd_crossover, roc_momentum
 from .mean_reversion import rsi_strategy, bollinger_squeeze
@@ -36,6 +36,7 @@ def composite_score(
     Leveraged ETFs skip mean reversion strategies.
     """
     is_leveraged = symbol.upper() in LEVERAGED_ETFS
+    is_inverse   = symbol.upper() in INVERSE_ETFS
     p = STRATEGY_PARAMS
     _weights = weights if weights is not None else STRATEGY_WEIGHTS
 
@@ -56,8 +57,10 @@ def composite_score(
         strategy_results["rsi_strategy"] = rsi_strategy(df, **p["rsi"])
         strategy_results["bollinger_squeeze"] = bollinger_squeeze(df, **p["bollinger"])
 
-    # Macro
-    strategy_results["vix_timing"] = vix_timing(df, vix_df=vix_df, **p["vix"])
+    # Macro — invert VIX signal for short/inverse ETFs
+    strategy_results["vix_timing"] = vix_timing(
+        df, vix_df=vix_df, inverse=is_inverse, **p["vix"]
+    )
 
     # Build score series (sum of all signal_series × weight aligned to df.index)
     score_series = pd.Series(0.0, index=df.index)
@@ -108,6 +111,7 @@ def run_all_strategies(
     Returns dict keyed by strategy name, each containing the strategy result dict.
     """
     is_leveraged = symbol.upper() in LEVERAGED_ETFS
+    is_inverse   = symbol.upper() in INVERSE_ETFS
     p = STRATEGY_PARAMS
 
     results = {}
@@ -122,7 +126,7 @@ def run_all_strategies(
         results["rsi_strategy"]     = rsi_strategy(df, **p["rsi"])
         results["bollinger_squeeze"]= bollinger_squeeze(df, **p["bollinger"])
 
-    results["vix_timing"] = vix_timing(df, vix_df=vix_df, **p["vix"])
+    results["vix_timing"] = vix_timing(df, vix_df=vix_df, inverse=is_inverse, **p["vix"])
     results["composite_score"] = composite_score(
         df, symbol=symbol, vix_df=vix_df,
         buy_threshold=p["composite"]["buy_threshold"],

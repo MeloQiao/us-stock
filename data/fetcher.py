@@ -121,6 +121,15 @@ def fetch_history(
         cn → "510300", "600519"
     market : "us" | "hk" | "cn"
     """
+    # Auto-detect market from symbol format if caller forgot to specify
+    if market == "us" and symbol.isdigit():
+        if len(symbol) == 6:
+            logger.warning("CN-looking code '%s' passed with market='us' — auto-routing to cn", symbol)
+            market = "cn"
+        elif len(symbol) == 5:
+            logger.warning("HK-looking code '%s' passed with market='us' — auto-routing to hk", symbol)
+            market = "hk"
+
     cache_key = f"{market}:{symbol}:{years}y"
     if not force_refresh and cache_key in _cache:
         logger.debug("Cache hit: %s", cache_key)

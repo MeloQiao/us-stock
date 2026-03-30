@@ -195,6 +195,9 @@ WATCHLIST = MARKET_WATCHLISTS["us"]
 # Includes HK 2x ETFs (07226 / 07500)
 LEVERAGED_ETFS = {"TQQQ", "SQQQ", "SPXL", "SOXL", "SOXS", "UVXY", "07226", "07552", "07500"}
 
+# Inverse/short ETFs: VIX signal is flipped — high VIX = BUY, low VIX = SELL
+INVERSE_ETFS = {"SQQQ", "SOXS", "07552"}
+
 # ── Strategy weights (used by composite scoring) ─────────────────────────
 # Each strategy contributes its weight to the composite score.
 # Default: all equal (1). Increase a weight to give that strategy more influence.
