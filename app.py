@@ -82,22 +82,25 @@ def compute_signals(symbol: str) -> dict:
 
 
 @st.cache_data(ttl=300)
-def get_dashboard_signals() -> dict[str, dict[str, int]]:
+def get_dashboard_signals(market: str = "us") -> dict[str, dict[str, int]]:
     """
     Load today's pre-computed signals from HF Dataset for the dashboard.
-    Falls back to computing fresh if HF signals not available.
+    Falls back to computing fresh for US symbols only (fast enough for Streamlit).
     Returns {symbol: {strategy: signal_int}}.
     """
     from data.fetcher import load_today_signals_from_hf
+    from config import MARKET_WATCHLISTS
     if HF_TOKEN and HF_DATASET_REPO:
         signals = load_today_signals_from_hf(
-            market="us", hf_repo=HF_DATASET_REPO, hf_token=HF_TOKEN
+            market=market, hf_repo=HF_DATASET_REPO, hf_token=HF_TOKEN
         )
         if signals:
             return signals
-    # Fallback: compute on-the-fly
+    # Fallback: compute on-the-fly for this market's symbols only
+    watchlist = MARKET_WATCHLISTS.get(market, {})
+    market_symbols = [s for group in watchlist.values() for s in group]
     result = {}
-    for sym in ALL_SYMBOLS:
+    for sym in market_symbols:
         try:
             r = compute_signals(sym)
             result[sym] = {k: v["signal"] for k, v in r.items()}
@@ -151,13 +154,45 @@ with tab1:
     with col_time:
         st.caption(f"最后更新: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ·  自动 {UI_REFRESH_SECONDS}s 刷新")
 
-    # Load signals + quotes in parallel
-    with st.spinner("加载信号和行情..."):
-        dashboard_signals = get_dashboard_signals()
-        quotes = get_quotes(ALL_SYMBOLS)
+    # Market selector for dashboard
+    selected_market = st.selectbox(
+        "市场", ["us", "hk", "cn"],
+        format_func=lambda m: {"us": "🇺🇸 美股", "hk": "🇭🇰 港股", "cn": "🇨🇳 A股"}[m],
+        key="dash_market",
+    )
 
-    signal_source = "HF Dataset ✅" if (HF_TOKEN and HF_DATASET_REPO and dashboard_signals) else "实时计算"
+    from config import MARKET_WATCHLISTS
+    market_symbols = [s for g in MARKET_WATCHLISTS.get(selected_market, {}).values() for s in g]
+
+    # Try HF Dataset first; fall back only if necessary
+    dashboard_signals: dict = {}
+    signal_source = "实时计算"
+    if HF_TOKEN and HF_DATASET_REPO:
+        with st.spinner("📡 读取 HF Dataset 信号..."):
+            from data.fetcher import load_today_signals_from_hf
+            dashboard_signals = load_today_signals_from_hf(
+                market=selected_market, hf_repo=HF_DATASET_REPO, hf_token=HF_TOKEN
+            ) or {}
+        if dashboard_signals:
+            signal_source = "HF Dataset ✅"
+
+    if not dashboard_signals:
+        st.info("⏳ HF Dataset 中暂无今日信号（daily pipeline 尚未运行），正在实时计算中，请稍等约 2 分钟...")
+        with st.spinner(f"实时计算 {len(market_symbols)} 个标的信号..."):
+            progress = st.progress(0)
+            for i, sym in enumerate(market_symbols):
+                try:
+                    r = compute_signals(sym)
+                    dashboard_signals[sym] = {k: v["signal"] for k, v in r.items()}
+                except Exception:
+                    pass
+                progress.progress((i + 1) / len(market_symbols))
+            progress.empty()
+
     st.caption(f"信号来源: {signal_source}")
+
+    with st.spinner("加载行情..."):
+        quotes = get_quotes(market_symbols)
 
     quotes_df = pd.DataFrame(quotes)
     if not quotes_df.empty and "price" in quotes_df.columns:
@@ -190,9 +225,11 @@ with tab1:
             except Exception:
                 return ""
 
-        display_cols = ["symbol", "price", "change", "change_pct", "综合信号", "评分"]
-        display_df = quotes_df[display_cols].rename(columns={
-            "symbol": "标的", "price": "价格", "change": "变动", "change_pct": "涨跌%"
+        from config import SYMBOL_NAMES
+        quotes_df["名称"] = quotes_df["symbol"].map(lambda s: SYMBOL_NAMES.get(s, ""))
+        display_cols = ["symbol", "名称", "price", "change", "change_pct", "综合信号", "评分"]
+        display_df = quotes_df[[c for c in display_cols if c in quotes_df.columns]].rename(columns={
+            "symbol": "标的", "名称": "名称", "price": "价格", "change": "变动", "change_pct": "涨跌%"
         })
         st.dataframe(
             display_df.style.applymap(color_change, subset=["涨跌%"]),
