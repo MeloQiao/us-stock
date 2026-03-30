@@ -136,24 +136,43 @@ def apply_regime_gate(
 ) -> dict[str, int]:
     """
     Filter signals through regime gate.
-    In bear regime: all buy (1) signals → 0 (hold).
-    Sell (-1) signals always pass through regardless of regime.
+    In bear regime: long buy (1) signals → 0 (hold).
+    EXCEPTIONS:
+      - Inverse/short ETFs (SQQQ, SOXS, 07552): bear market = their time to shine,
+        buy signals are KEPT (not blocked).
+      - Sell (-1) signals always pass through regardless of regime.
 
     Returns a new signals dict.
     """
     if regime_info.get("allow_buy", True):
         return dict(signals)
 
-    gated = {}
-    for sym, sig in signals.items():
-        gated[sym] = 0 if sig == 1 else sig  # block buys, keep sells & holds
+    from config import INVERSE_ETFS
 
-    blocked = [s for s, sig in signals.items() if sig == 1]
+    gated = {}
+    blocked = []
+    passed_inverse = []
+
+    for sym, sig in signals.items():
+        if sig == 1 and sym.upper() in INVERSE_ETFS:
+            # Bear market: allow inverse ETF buys through
+            gated[sym] = 1
+            passed_inverse.append(sym)
+        elif sig == 1:
+            # Bear market: block normal long buys
+            gated[sym] = 0
+            blocked.append(sym)
+        else:
+            gated[sym] = sig  # holds and sells pass through unchanged
+
     if blocked:
         logger.info(
-            "Regime gate [%s]: blocked %d buy signal(s) → %s",
-            regime_info.get("regime", "bear"),
-            len(blocked),
-            blocked,
+            "Regime gate [bear]: blocked %d long buy(s) → %s",
+            len(blocked), blocked,
+        )
+    if passed_inverse:
+        logger.info(
+            "Regime gate [bear]: allowed %d inverse ETF buy(s) → %s",
+            len(passed_inverse), passed_inverse,
         )
     return gated
