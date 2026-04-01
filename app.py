@@ -214,7 +214,7 @@ def _render_market_section(market: str) -> None:
     st.dataframe(
         display_df.style
             .format(fmt, na_rep="—")
-            .applymap(color_change, subset=["涨跌%"]),
+            .map(color_change, subset=["涨跌%"]),
         use_container_width=True,
         hide_index=True,
     )
@@ -490,7 +490,7 @@ with tab4:
                     pos_df = pd.DataFrame(positions)
                     pos_df["unrealized_plpc"] = pos_df["unrealized_plpc"].round(2)
                     st.dataframe(
-                        pos_df.style.applymap(color_pl, subset=["unrealized_pl", "unrealized_plpc"]),
+                        pos_df.style.map(color_pl, subset=["unrealized_pl", "unrealized_plpc"]),
                         use_container_width=True, hide_index=True,
                     )
                 else:
@@ -551,7 +551,7 @@ with tab4:
                         pnl_cols = [c for c in ["浮盈亏", "盈亏%"] if c in pos_df_show.columns]
                         if pnl_cols:
                             st.dataframe(
-                                pos_df_show.style.applymap(color_pl, subset=pnl_cols),
+                                pos_df_show.style.map(color_pl, subset=pnl_cols),
                                 use_container_width=True, hide_index=True,
                             )
                         else:
@@ -573,7 +573,7 @@ with tab4:
                         pnl_cols_h = [c for c in ["盈亏"] if c in hist_show.columns]
                         if pnl_cols_h:
                             st.dataframe(
-                                hist_show.style.applymap(color_pl, subset=pnl_cols_h),
+                                hist_show.style.map(color_pl, subset=pnl_cols_h),
                                 use_container_width=True, hide_index=True,
                             )
                         else:
