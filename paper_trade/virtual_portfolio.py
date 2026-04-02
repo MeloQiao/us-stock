@@ -47,12 +47,14 @@ class VirtualPortfolio:
         currency: str,
         hf_repo: str,
         hf_token: str,
+        max_position_fraction: float = 0.25,
     ):
         self.market = market
         self.total_capital = total_capital
         self.currency = currency
         self.hf_repo = hf_repo
         self.hf_token = hf_token
+        self.max_position_fraction = max_position_fraction  # cap per position
 
         self._open: pd.DataFrame = self._load_open()
         self._history: pd.DataFrame = self._load_history()
@@ -64,14 +66,15 @@ class VirtualPortfolio:
 
     def _load_df(self, name: str, columns: list[str]) -> pd.DataFrame:
         try:
-            from huggingface_hub import hf_hub_download
-            path = hf_hub_download(
-                repo_id=self.hf_repo,
-                filename=self._hf_path(name),
-                repo_type="dataset",
-                token=self.hf_token,
+            import requests
+            url = (
+                f"https://huggingface.co/datasets/{self.hf_repo}"
+                f"/resolve/main/{self._hf_path(name)}"
             )
-            return pd.read_parquet(path)
+            headers = {"Authorization": f"Bearer {self.hf_token}"}
+            resp = requests.get(url, headers=headers, timeout=30)
+            resp.raise_for_status()
+            return pd.read_parquet(io.BytesIO(resp.content))
         except Exception as e:
             logger.debug("Virtual portfolio %s load failed [%s]: %s", name, self.market, e)
             return pd.DataFrame(columns=columns)
@@ -208,8 +211,10 @@ class VirtualPortfolio:
                 total_w = sum(raw_weights_raw.values())
                 raw_weights = {s: raw_weights_raw[s] / total_w for s in new_buys}
 
+            max_per_position = self.total_capital * self.max_position_fraction
+
             for symbol in new_buys:
-                notional = budget * raw_weights[symbol]
+                notional = min(budget * raw_weights[symbol], max_per_position)
                 price = prices.get(symbol, 0.0)
                 if notional < 1 or price <= 0:
                     logger.warning("[%s] Skip %s notional=%.2f price=%.4f",
