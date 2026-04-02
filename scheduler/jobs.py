@@ -183,6 +183,17 @@ def run_daily_pipeline(market: Market = "us") -> dict:
     prices: dict[str, float] = {
         sym: float(df["Close"].iloc[-1]) for sym, df in data.items() if not df.empty
     }
+    # Build price info for Feishu: close + 1-day change %
+    price_info: dict[str, dict] = {}
+    for sym, df in data.items():
+        if df.empty or len(df) < 2:
+            continue
+        close = float(df["Close"].iloc[-1])
+        prev  = float(df["Close"].iloc[-2])
+        price_info[sym] = {
+            "close": close,
+            "change_pct": round((close - prev) / prev * 100, 2) if prev else 0.0,
+        }
 
     if market == "us" and ALPACA_API_KEY:
         try:
@@ -238,6 +249,7 @@ def run_daily_pipeline(market: Market = "us") -> dict:
                 portfolio_summary=portfolio_summary if portfolio_summary else None,
                 market=market,
                 regime_info=regime_info,
+                price_info=price_info if price_info else None,
             )
             summary["feishu_sent"] = ok
         except Exception as e:

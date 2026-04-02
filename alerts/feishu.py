@@ -83,6 +83,7 @@ def _build_signal_card(
     portfolio_summary: Optional[dict] = None,
     market: str = "us",
     regime_info: Optional[dict] = None,
+    price_info: Optional[dict] = None,
 ) -> dict:
     """
     Build a Feishu interactive card payload.
@@ -144,6 +145,8 @@ def _build_signal_card(
     for item in symbol_signals:
         symbol_map.setdefault(item["symbol"], []).append(item)
 
+    currency_sym = "¥" if market == "cn" else ("HK$" if market == "hk" else "$")
+
     for symbol, items in symbol_map.items():
         composite = next((i for i in items if i["strategy"] == "composite_score"), None)
         headline_signal = composite["signal"] if composite else 0
@@ -153,11 +156,24 @@ def _build_signal_card(
         name = SYMBOL_NAMES.get(symbol, "")
         display = f"{symbol} {name}" if name else symbol
 
+        # Price + change line
+        pinfo = (price_info or {}).get(symbol)
+        if pinfo:
+            close = pinfo["close"]
+            chg = pinfo["change_pct"]
+            chg_arrow = "▲" if chg >= 0 else "▼"
+            price_str = f"  |  收盘: {currency_sym}{close:,.2f}  {chg_arrow} {abs(chg):.2f}%"
+        else:
+            price_str = ""
+
         elements.append({
             "tag": "div",
             "text": {
                 "tag": "lark_md",
-                "content": f"**{emoji} {display}**  综合评分: {score}/{max_s}  →  {SIGNAL_TEXT[headline_signal]}",
+                "content": (
+                    f"**{emoji} {display}**{price_str}\n"
+                    f"综合评分: {score}/{max_s}  →  {SIGNAL_TEXT[headline_signal]}"
+                ),
             },
         })
 
@@ -267,6 +283,7 @@ def send_signal_alert(
     portfolio_summary: Optional[dict] = None,
     market: str = "us",
     regime_info: Optional[dict] = None,
+    price_info: Optional[dict] = None,
 ) -> bool:
     """
     Send strategy signal alert to Feishu group via webhook.
@@ -289,6 +306,7 @@ def send_signal_alert(
         date, symbol_signals, vix_value,
         trades=trades, portfolio_summary=portfolio_summary,
         market=market, regime_info=regime_info,
+        price_info=price_info,
     )
 
     try:
