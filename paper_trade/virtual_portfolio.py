@@ -54,7 +54,7 @@ class VirtualPortfolio:
         self.currency = currency
         self.hf_repo = hf_repo
         self.hf_token = hf_token
-        self.max_position_fraction = max_position_fraction  # cap per position
+        self.max_position_fraction = max_position_fraction  # static fallback cap
 
         self._open: pd.DataFrame = self._load_open()
         self._history: pd.DataFrame = self._load_history()
@@ -119,6 +119,13 @@ class VirtualPortfolio:
 
     # ── Execute signals ────────────────────────────────────────────────────
 
+    # Regime → base max-position fraction (tunable after live-data accumulates)
+    _REGIME_BASE_FRACTION: dict[str, float] = {
+        "bull_strong":  0.30,   # confident trend — allow bigger positions
+        "bull_caution": 0.20,   # mixed signals — stay moderate
+        "bear":         0.15,   # defensive — inverse ETFs only, keep small
+    }
+
     def execute_signals(
         self,
         signals: dict[str, int],
@@ -126,16 +133,25 @@ class VirtualPortfolio:
         prices: dict[str, float],
         weights: Optional[dict[str, float]] = None,
         date: Optional[str] = None,
+        regime: str = "bull_caution",
+        max_possible: int = 9,
     ) -> list[dict]:
         """
         Process signals for this market. Updates internal state and persists.
 
         Parameters
         ----------
-        signals : {symbol: 1 / -1 / 0}
-        scores  : {symbol: composite_score}
-        prices  : {symbol: last_close_price}  in local currency
-        date    : trade date string (YYYY-MM-DD), defaults to today
+        signals     : {symbol: 1 / -1 / 0}
+        scores      : {symbol: composite_score}
+        prices      : {symbol: last_close_price}  in local currency
+        regime      : current market regime ("bull_strong"|"bull_caution"|"bear")
+        max_possible: max composite score denominator (default 9)
+        date        : trade date string (YYYY-MM-DD), defaults to today
+
+        Position cap per symbol:
+          base_fraction = _REGIME_BASE_FRACTION[regime]   (e.g. 0.20)
+          score_factor  = clamp(score / max_possible, 0.5, 1.0)
+          cap           = total_capital * base_fraction * score_factor
 
         Returns list of trade records for Feishu notification.
         """
@@ -211,10 +227,13 @@ class VirtualPortfolio:
                 total_w = sum(raw_weights_raw.values())
                 raw_weights = {s: raw_weights_raw[s] / total_w for s in new_buys}
 
-            max_per_position = self.total_capital * self.max_position_fraction
+            base_fraction = self._REGIME_BASE_FRACTION.get(regime, self.max_position_fraction)
 
             for symbol in new_buys:
-                notional = min(budget * raw_weights[symbol], max_per_position)
+                sym_score = scores.get(symbol, max_possible)
+                score_factor = max(0.5, min(1.0, sym_score / max_possible))
+                dynamic_cap = self.total_capital * base_fraction * score_factor
+                notional = min(budget * raw_weights[symbol], dynamic_cap)
                 price = prices.get(symbol, 0.0)
                 if notional < 1 or price <= 0:
                     logger.warning("[%s] Skip %s notional=%.2f price=%.4f",

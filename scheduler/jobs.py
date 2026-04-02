@@ -225,6 +225,8 @@ def run_daily_pipeline(market: Market = "us") -> dict:
                 scores=composite_scores,
                 prices=prices,
                 weights=portfolio_weights if portfolio_weights else None,
+                regime=regime_info.get("sub_state", "bull_caution"),
+                max_possible=9,
             )
             portfolio_summary = vp.get_summary(prices=prices)
             summary["trades"] = trade_results
