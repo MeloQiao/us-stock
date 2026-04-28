@@ -137,7 +137,7 @@ def run_daily_pipeline(market: Market = "us") -> dict:
         try:
             results = run_all_strategies(
                 data[symbol], symbol=symbol, vix_df=vix_df,
-                weights=strategy_weights,
+                weights=strategy_weights, market=market,
             )
             all_results[symbol] = results
             composite_signals[symbol] = results["composite_score"]["signal"]

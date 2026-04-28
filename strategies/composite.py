@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from config import LEVERAGED_ETFS, INVERSE_ETFS, STRATEGY_PARAMS, STRATEGY_WEIGHTS
+from config import LEVERAGED_ETFS, INVERSE_ETFS, STRATEGY_PARAMS, STRATEGY_WEIGHTS, COMPOSITE_BUY_THRESHOLD
 from .trend import golden_cross, supertrend, donchian_channel, ema_adx
 from .momentum import macd_crossover, roc_momentum
 from .mean_reversion import rsi_strategy, bollinger_squeeze
@@ -18,8 +18,8 @@ def composite_score(
     df: pd.DataFrame,
     symbol: str = "",
     vix_df: pd.DataFrame | None = None,
-    buy_threshold: int = 6,
-    sell_threshold: int = 4,
+    buy_threshold: float = 6.0,
+    sell_threshold: float = 4.0,
     weights: dict | None = None,
 ) -> dict:
     """
@@ -99,6 +99,7 @@ def run_all_strategies(
     symbol: str = "",
     vix_df: pd.DataFrame | None = None,
     weights: dict | None = None,
+    market: str = "us",
 ) -> dict:
     """
     Run all individual strategies + composite for a symbol.
@@ -107,6 +108,7 @@ def run_all_strategies(
     ----------
     weights : regime-specific strategy weights from walk_forward_optimizer.
               If None, falls back to equal weights (1.0 per strategy).
+    market  : "us" | "hk" | "cn" — controls per-market buy threshold.
 
     Returns dict keyed by strategy name, each containing the strategy result dict.
     """
@@ -129,7 +131,7 @@ def run_all_strategies(
     results["vix_timing"] = vix_timing(df, vix_df=vix_df, inverse=is_inverse, **p["vix"])
     results["composite_score"] = composite_score(
         df, symbol=symbol, vix_df=vix_df,
-        buy_threshold=p["composite"]["buy_threshold"],
+        buy_threshold=COMPOSITE_BUY_THRESHOLD.get(market, p["composite"]["buy_threshold"]),
         sell_threshold=p["composite"]["sell_threshold"],
         weights=weights,
     )

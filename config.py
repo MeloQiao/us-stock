@@ -202,16 +202,24 @@ INVERSE_ETFS = {"SQQQ", "SOXS", "07552"}
 # Each strategy contributes its weight to the composite score.
 # Default: all equal (1). Increase a weight to give that strategy more influence.
 # Max possible score = sum of weights for applicable strategies.
-STRATEGY_WEIGHTS: dict[str, int] = {
-    "golden_cross":     1,   # trend: 50/200 MA cross
-    "supertrend":       1,   # trend: ATR-based
-    "donchian_channel": 1,   # trend: breakout
-    "ema_adx":          1,   # trend: EMA + ADX filter
-    "macd_crossover":   1,   # momentum: MACD signal line
-    "roc_momentum":     1,   # momentum: rate of change
-    "rsi_strategy":     1,   # mean reversion (skipped for leveraged)
-    "bollinger_squeeze":1,   # mean reversion (skipped for leveraged)
-    "vix_timing":       1,   # macro: VIX gate
+STRATEGY_WEIGHTS: dict[str, float] = {
+    "golden_cross":      2.0,  # trend: 50/200 MA cross  ← best performer, boosted
+    "supertrend":        1.0,  # trend: ATR-based
+    "donchian_channel":  1.0,  # trend: breakout
+    "ema_adx":           0.5,  # trend: EMA + ADX filter ← poor performer, halved
+    "macd_crossover":    1.0,  # momentum: MACD signal line
+    "roc_momentum":      1.0,  # momentum: rate of change
+    "rsi_strategy":      1.0,  # mean reversion (skipped for leveraged)
+    "bollinger_squeeze": 1.0,  # mean reversion (skipped for leveraged)
+    "vix_timing":        0.3,  # macro: VIX gate         ← failed this period, reduced
+}
+
+# Per-market composite BUY threshold (absolute weighted score)
+# HK raised to 7 — signal quality was poor, require stronger consensus
+COMPOSITE_BUY_THRESHOLD: dict[str, float] = {
+    "us": 6.0,
+    "hk": 7.0,
+    "cn": 6.0,
 }
 
 # ── Strategy parameters ───────────────────────────────────────────────────
