@@ -147,48 +147,41 @@ def _build_signal_card(
 
     currency_sym = "¥" if market == "cn" else ("HK$" if market == "hk" else "$")
 
+    # ── Compact signal table: one row per symbol ──────────────────────────
+    rows = [
+        "| 标的 | 收盘价 | 涨跌 | 评分 | 信号 |",
+        "|------|--------|------|------|------|",
+    ]
     for symbol, items in symbol_map.items():
         composite = next((i for i in items if i["strategy"] == "composite_score"), None)
         headline_signal = composite["signal"] if composite else 0
         emoji = SIGNAL_EMOJI[headline_signal]
-        score = composite.get("total_score", "—") if composite else "—"
-        max_s = composite.get("max_possible", 9) if composite else 9
-        name = SYMBOL_NAMES.get(symbol, "")
+        score   = composite.get("total_score", 0) if composite else 0
+        max_s   = composite.get("max_possible", 9) if composite else 9
+        name    = SYMBOL_NAMES.get(symbol, "")
         display = f"{symbol} {name}" if name else symbol
 
-        # Price + change line
         pinfo = (price_info or {}).get(symbol)
         if pinfo:
             close = pinfo["close"]
-            chg = pinfo["change_pct"]
+            chg   = pinfo["change_pct"]
             chg_arrow = "▲" if chg >= 0 else "▼"
-            price_str = f"  |  收盘: {currency_sym}{close:,.2f}  {chg_arrow} {abs(chg):.2f}%"
+            price_col = f"{currency_sym}{close:,.2f}"
+            chg_col   = f"{chg_arrow}{abs(chg):.2f}%"
         else:
-            price_str = ""
+            price_col = "—"
+            chg_col   = "—"
 
-        elements.append({
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": (
-                    f"**{emoji} {display}**{price_str}\n"
-                    f"综合评分: {score}/{max_s}  →  {SIGNAL_TEXT[headline_signal]}"
-                ),
-            },
-        })
+        score_col = f"{score:.2f}/{max_s:.2f}"
+        rows.append(
+            f"| {display} | {price_col} | {chg_col} | {score_col} | {emoji} {SIGNAL_TEXT[headline_signal]} |"
+        )
 
-        rows = ["| 策略 | 信号 |", "|------|------|"]
-        for item in items:
-            if item["strategy"] == "composite_score":
-                continue
-            rows.append(
-                f"| {item['strategy_label']} | {SIGNAL_EMOJI[item['signal']]} {SIGNAL_TEXT[item['signal']]} |"
-            )
-        elements.append({
-            "tag": "div",
-            "text": {"tag": "lark_md", "content": "\n".join(rows)},
-        })
-        elements.append({"tag": "hr"})
+    elements.append({
+        "tag": "div",
+        "text": {"tag": "lark_md", "content": "\n".join(rows)},
+    })
+    elements.append({"tag": "hr"})
 
     # ── Portfolio NAV + positions ─────────────────────────────────────────
     if portfolio_summary is not None:
