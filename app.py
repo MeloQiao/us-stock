@@ -306,7 +306,7 @@ with tab2:
             key="bt_strategy",
         )
     with col_yr:
-        bt_years = st.slider("年数", 1, 10, 5, key="bt_years")
+        bt_years = st.slider("年数", 1, 15, 5, key="bt_years")
 
     if st.button("▶ 运行回测", key="run_bt"):
         with st.spinner("运行回测..."):
