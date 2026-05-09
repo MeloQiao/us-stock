@@ -32,27 +32,141 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # ── Step 1: Snapshot current weights from HF before running ──────────
+      - name: Snapshot weights before optimization
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+        run: |
+          python3 - <<'EOF'
+          import os, json, requests
+
+          token = os.getenv("HF_TOKEN", "")
+          repo  = os.getenv("HF_DATASET_REPO", "")
+          headers = {"Authorization": f"Bearer {token}"}
+          market_input = "${{ github.event.inputs.market || 'all' }}"
+          markets = ["us", "hk", "cn"] if market_input == "all" else [market_input]
+
+          before = {}
+          for m in markets:
+              url = f"https://huggingface.co/datasets/{repo}/resolve/main/weights/{m}/strategy_weights.json"
+              try:
+                  r = requests.get(url, headers=headers, timeout=20)
+                  if r.status_code == 200:
+                      before[m] = r.json()
+                      print(f"  ✓ Loaded existing weights for [{m}]")
+                  else:
+                      print(f"  — No existing weights for [{m}] (first run?)")
+              except Exception as e:
+                  print(f"  ✗ Failed to load [{m}]: {e}")
+
+          with open("/tmp/weights_before.json", "w") as f:
+              json.dump(before, f)
+          print(f"Saved before-snapshot for markets: {list(before.keys())}")
+          EOF
+
+      # ── Step 2: Run optimizer ─────────────────────────────────────────────
       - name: Run weight optimizer
         env:
           HF_TOKEN:          ${{ secrets.HF_TOKEN }}
           HF_DATASET_REPO:   ${{ secrets.HF_DATASET_REPO }}
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
         run: |
           MARKET="${{ github.event.inputs.market || 'all' }}"
           echo "Optimizing weights for market: $MARKET"
           python -m strategies.walk_forward_optimizer --market "$MARKET"
 
-      - name: Notify Feishu on failure
-        if: failure()
+      # ── Step 3: Compare before/after and notify Feishu ───────────────────
+      - name: Notify Feishu with weight changes
+        if: always()
         env:
+          HF_TOKEN:          ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO:   ${{ secrets.HF_DATASET_REPO }}
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
         run: |
-          python - <<'EOF'
-          import os, httpx
-          url = os.getenv("FEISHU_WEBHOOK_URL", "")
-          if url:
-              httpx.post(url, json={
-                  "msg_type": "text",
-                  "content": {"text": "[US Stock Monitor] ⚠️ 策略权重优化任务失败，请检查 GitHub Actions 日志"}
-              }, timeout=10)
+          python3 - <<'EOF'
+          import os, json, requests, httpx
+          from datetime import datetime
+
+          token   = os.getenv("HF_TOKEN", "")
+          repo    = os.getenv("HF_DATASET_REPO", "")
+          fei_url = os.getenv("FEISHU_WEBHOOK_URL", "")
+          headers = {"Authorization": f"Bearer {token}"}
+
+          market_input = "${{ github.event.inputs.market || 'all' }}"
+          markets = ["us", "hk", "cn"] if market_input == "all" else [market_input]
+
+          # Load before snapshot
+          try:
+              with open("/tmp/weights_before.json") as f:
+                  before_all = json.load(f)
+          except Exception:
+              before_all = {}
+
+          # Load after weights from HF
+          after_all = {}
+          for m in markets:
+              url = f"https://huggingface.co/datasets/{repo}/resolve/main/weights/{m}/strategy_weights.json"
+              try:
+                  r = requests.get(url, headers=headers, timeout=20)
+                  if r.status_code == 200:
+                      after_all[m] = r.json()
+              except Exception as e:
+                  print(f"Could not load new weights for [{m}]: {e}")
+
+          REGIME_LABEL = {
+              "bull_strong":  "🟢 牛市强势",
+              "bull_caution": "🟡 牛市承压",
+              "bear":         "🔴 熊市",
+          }
+          MARKET_LABEL = {"us": "🇺🇸 美股", "hk": "🇭🇰 港股", "cn": "🇨🇳 A股"}
+          THRESHOLD = 0.15   # only report changes >= this magnitude
+
+          lines = [f"[US Stock Monitor] 📊 策略权重周度更新 {datetime.now().strftime('%Y-%m-%d')}"]
+          any_change = False
+
+          for m in markets:
+              before = before_all.get(m, {}).get("regimes", {})
+              after  = after_all.get(m, {}).get("regimes", {})
+              if not after:
+                  lines.append(f"\n{MARKET_LABEL.get(m, m)}: ⚠️ 优化失败或无数据")
+                  continue
+
+              mkt_changes = []
+              for regime, new_ws in after.items():
+                  old_ws = before.get(regime, {})
+                  for strat, new_w in new_ws.items():
+                      old_w = old_ws.get(strat, 1.0)
+                      delta = new_w - old_w
+                      if abs(delta) >= THRESHOLD:
+                          arrow = "▲" if delta > 0 else "▼"
+                          mkt_changes.append((abs(delta), regime, strat, old_w, new_w, arrow))
+
+              mkt_changes.sort(reverse=True)   # biggest changes first
+
+              if mkt_changes:
+                  any_change = True
+                  lines.append(f"\n{MARKET_LABEL.get(m, m)} — 变化最大的权重 (|Δ|≥{THRESHOLD}):")
+                  for _, regime, strat, old_w, new_w, arrow in mkt_changes[:6]:
+                      rlabel = REGIME_LABEL.get(regime, regime)
+                      lines.append(f"  {rlabel} | {strat}: {old_w:.2f} → {new_w:.2f} {arrow}")
+              else:
+                  lines.append(f"\n{MARKET_LABEL.get(m, m)}: 权重无显著变化 (所有策略 Δ < {THRESHOLD})")
+
+          if any_change:
+              lines.append("\n✅ 新权重已保存到 HF Dataset，今日 pipeline 将使用")
+          else:
+              lines.append("\n✅ 权重稳定，无需更新")
+
+          text = "\n".join(lines)
+          print(text)
+
+          if fei_url:
+              try:
+                  httpx.post(fei_url, json={
+                      "msg_type": "text",
+                      "content": {"text": text}
+                  }, timeout=10)
+                  print("Feishu notified.")
+              except Exception as e:
+                  print(f"Feishu failed: {e}")
           EOF
