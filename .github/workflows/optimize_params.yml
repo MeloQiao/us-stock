@@ -1,0 +1,83 @@
+name: Optimize Strategy Parameters
+
+# Runs on the 1st of every month at 05:00 UTC (after month-end data is settled)
+# Also triggerable manually with optional fast mode
+
+on:
+  schedule:
+    - cron: "0 5 1 * *"
+  workflow_dispatch:
+    inputs:
+      fast:
+        description: "Fast mode (3 symbols, ~2 min)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run parameter optimizer
+        run: |
+          if [ "${{ github.event.inputs.fast }}" = "true" ]; then
+            python3 scripts/optimize_params.py --fast
+          else
+            python3 scripts/optimize_params.py
+          fi
+
+      - name: Upload results artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimal_params
+          path: scripts/optimal_params.json
+          retention-days: 90
+
+      - name: Post results to Feishu
+        if: always()
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, httpx
+
+          url = os.getenv("FEISHU_WEBHOOK_URL", "")
+          if not url:
+              print("No Feishu webhook set")
+              exit(0)
+
+          try:
+              with open("scripts/optimal_params.json") as f:
+                  data = json.load(f)
+
+              comp = data.get("composite", {})
+              params = data.get("strategy_params", {})
+
+              lines = [f"[US Stock Monitor] 📊 月度参数优化完成 {data.get('computed_at','')}"]
+              lines.append(f"综合阈值: buy≥{comp.get('buy_threshold')} / sell≤-{comp.get('sell_threshold')}")
+              lines.append(f"平均 Sharpe: {comp.get('avg_sharpe', 0):.3f}  MaxDD: {comp.get('avg_max_dd', 0):.1%}")
+              lines.append("详见 GitHub Actions Artifacts → optimal_params.json")
+
+              httpx.post(url, json={
+                  "msg_type": "text",
+                  "content": {"text": "\n".join(lines)}
+              }, timeout=10)
+              print("Feishu notified")
+          except Exception as e:
+              print(f"Feishu notify failed: {e}")
+          EOF
