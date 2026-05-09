@@ -287,16 +287,16 @@ COMPOSITE_BUY_THRESHOLD: dict[str, float] = {
 
 # ── Strategy parameters ───────────────────────────────────────────────────
 STRATEGY_PARAMS = {
-    "golden_cross": {"fast": 50, "slow": 200},
-    "supertrend": {"atr_period": 10, "multiplier": 3.0},
+    "golden_cross": {"fast": 20, "slow": 100},
+    "supertrend": {"atr_period": 10, "multiplier": 2.5},
     "donchian": {"entry_period": 20, "exit_period": 10},
-    "ema_adx": {"ema_fast": 12, "ema_slow": 26, "adx_period": 14, "adx_threshold": 25},
+    "ema_adx": {"ema_fast": 8, "ema_slow": 21, "adx_period": 14, "adx_threshold": 20},
     "macd": {"fast": 12, "slow": 26, "signal_period": 9},
     "roc": {"period_short": 20, "period_long": 60},
-    "rsi": {"period": 14, "oversold": 30, "overbought": 70},
-    "bollinger": {"period": 20, "std_dev": 2.0, "squeeze_threshold": 0.1},
+    "rsi": {"period": 14, "oversold": 25, "overbought": 75},
+    "bollinger": {"period": 20, "std_dev": 1.5, "squeeze_threshold": 0.1},
     "vix": {"fear_threshold": 30, "greed_threshold": 15},
-    "composite": {"buy_threshold": 6, "sell_threshold": 4},
+    "composite": {"buy_threshold": 6, "sell_threshold": 3.0},
 }
 
 # ── Data settings ─────────────────────────────────────────────────────────

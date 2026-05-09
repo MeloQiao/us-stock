@@ -1,0 +1,59 @@
+{
+  "computed_at": "2026-05-09 12:12",
+  "mode": "full",
+  "symbols": [
+    "SPY",
+    "QQQ",
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMD",
+    "TSLA",
+    "META"
+  ],
+  "strategy_params": {
+    "golden_cross": {
+      "fast": 20,
+      "slow": 100
+    },
+    "supertrend": {
+      "atr_period": 10,
+      "multiplier": 2.5
+    },
+    "donchian": {
+      "entry_period": 20,
+      "exit_period": 10
+    },
+    "ema_adx": {
+      "ema_fast": 8,
+      "ema_slow": 21,
+      "adx_period": 14,
+      "adx_threshold": 20
+    },
+    "macd": {
+      "fast": 12,
+      "slow": 26,
+      "signal_period": 9
+    },
+    "roc": {
+      "period_short": 20,
+      "period_long": 60
+    },
+    "rsi": {
+      "period": 14,
+      "oversold": 25,
+      "overbought": 75
+    },
+    "bollinger": {
+      "period": 20,
+      "std_dev": 1.5,
+      "squeeze_threshold": 0.1
+    }
+  },
+  "composite": {
+    "buy_threshold": 6.0,
+    "sell_threshold": 3.0,
+    "avg_sharpe": 0.5447875000000001,
+    "avg_max_dd": -0.1617208333333333
+  }
+}
