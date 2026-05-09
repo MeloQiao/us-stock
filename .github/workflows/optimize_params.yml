@@ -1,7 +1,12 @@
 name: Optimize Strategy Parameters
 
-# Runs on the 1st of every month at 05:00 UTC (after month-end data is settled)
-# Also triggerable manually with optional fast mode
+# Runs on the 1st of every month at 05:00 UTC
+# Full automation:
+#   1. Grid-search optimal strategy params (15-year walk-forward)
+#   2. Save results to HF Dataset (history + latest)
+#   3. Apply changes to config.py
+#   4. Commit & push → Streamlit Cloud auto-redeploys
+#   5. Notify Feishu with what changed
 
 on:
   schedule:
@@ -15,6 +20,9 @@ on:
         type: choice
         options: ["false", "true"]
 
+permissions:
+  contents: write   # needed for git push back to repo
+
 jobs:
   optimize:
     runs-on: ubuntu-latest
@@ -23,6 +31,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so we can push back
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -33,7 +43,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # ── Step 1: Run optimizer (saves local JSON + uploads to HF) ──────────
       - name: Run parameter optimizer
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
         run: |
           if [ "${{ github.event.inputs.fast }}" = "true" ]; then
             python3 scripts/optimize_params.py --fast
@@ -41,43 +55,105 @@ jobs:
             python3 scripts/optimize_params.py
           fi
 
+      # ── Step 2: Apply changes to config.py ───────────────────────────────
+      - name: Apply optimal params to config.py
+        run: python3 scripts/apply_optimal_params.py --yes
+
+      # ── Step 3: Commit & push if anything changed ─────────────────────────
+      - name: Commit and push updated config
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add config.py scripts/optimal_params.json
+          if git diff --staged --quiet; then
+            echo "No parameter changes this month — config.py unchanged."
+          else
+            DATE=$(date +%Y-%m-%d)
+            git commit -m "Auto: monthly param optimisation ${DATE}
+
+Walk-forward optimizer (15yr, 8 symbols) found updated params.
+See scripts/optimal_params.json for details.
+
+Co-Authored-By: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+            git push origin main
+            echo "PARAMS_CHANGED=true" >> $GITHUB_ENV
+          fi
+
+      # ── Step 4: Upload artifact for manual inspection ─────────────────────
       - name: Upload results artifact
         uses: actions/upload-artifact@v4
         with:
-          name: optimal_params
+          name: optimal_params_${{ github.run_id }}
           path: scripts/optimal_params.json
-          retention-days: 90
+          retention-days: 365   # keep 1 year of history
 
-      - name: Post results to Feishu
+      # ── Step 5: Feishu notification ───────────────────────────────────────
+      - name: Notify Feishu
         if: always()
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          PARAMS_CHANGED:     ${{ env.PARAMS_CHANGED }}
         run: |
           python3 - <<'EOF'
           import json, os, httpx
 
           url = os.getenv("FEISHU_WEBHOOK_URL", "")
           if not url:
-              print("No Feishu webhook set")
+              print("No Feishu webhook — skip")
               exit(0)
+
+          changed = os.getenv("PARAMS_CHANGED", "") == "true"
 
           try:
               with open("scripts/optimal_params.json") as f:
                   data = json.load(f)
 
-              comp = data.get("composite", {})
+              comp   = data.get("composite", {})
               params = data.get("strategy_params", {})
 
-              lines = [f"[US Stock Monitor] 📊 月度参数优化完成 {data.get('computed_at','')}"]
-              lines.append(f"综合阈值: buy≥{comp.get('buy_threshold')} / sell≤-{comp.get('sell_threshold')}")
-              lines.append(f"平均 Sharpe: {comp.get('avg_sharpe', 0):.3f}  MaxDD: {comp.get('avg_max_dd', 0):.1%}")
-              lines.append("详见 GitHub Actions Artifacts → optimal_params.json")
+              # Detect which strategies changed vs current config
+              import sys; sys.path.insert(0, ".")
+              from config import STRATEGY_PARAMS as CURRENT
+              changed_strats = []
+              for key, new_vals in params.items():
+                  cur = CURRENT.get(key, {})
+                  if any(cur.get(k) != v for k, v in new_vals.items()):
+                      changed_strats.append(key)
 
+              if changed:
+                  title = f"[US Stock Monitor] 📊 月度参数自动更新完成 {data.get('computed_at','')}"
+                  detail_lines = []
+                  if changed_strats:
+                      detail_lines.append(f"更新策略: {', '.join(changed_strats)}")
+                  detail_lines.append(
+                      f"综合阈值: buy≥{comp.get('buy_threshold')} / sell≤-{comp.get('sell_threshold')}"
+                  )
+                  detail_lines.append(
+                      f"样本外 Sharpe: {comp.get('avg_sharpe', 0):.3f}  MaxDD: {comp.get('avg_max_dd', 0):.1%}"
+                  )
+                  detail_lines.append("✅ config.py 已自动更新，Streamlit 正在重新部署")
+              else:
+                  title = f"[US Stock Monitor] ✅ 月度参数检查完成 {data.get('computed_at','')}"
+                  detail_lines = [
+                      "当前参数已是最优，本月无需更新",
+                      f"样本外 Sharpe: {comp.get('avg_sharpe', 0):.3f}  MaxDD: {comp.get('avg_max_dd', 0):.1%}",
+                  ]
+
+              text = title + "\n" + "\n".join(detail_lines)
               httpx.post(url, json={
                   "msg_type": "text",
-                  "content": {"text": "\n".join(lines)}
+                  "content": {"text": text}
               }, timeout=10)
-              print("Feishu notified")
+              print("Feishu notified:", text)
+
           except Exception as e:
               print(f"Feishu notify failed: {e}")
+              # Send simple fallback
+              try:
+                  httpx.post(url, json={
+                      "msg_type": "text",
+                      "content": {"text": f"[US Stock Monitor] ⚠️ 月度参数优化完成，Feishu通知生成失败: {e}"}
+                  }, timeout=10)
+              except Exception:
+                  pass
           EOF

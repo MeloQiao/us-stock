@@ -91,7 +91,10 @@ def update_composite_threshold(cfg_text: str, buy_t: float, sell_t: float) -> tu
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print changes without writing")
+    parser.add_argument("--yes", action="store_true",
+                        help="Apply without confirmation (for CI/automation)")
     args = parser.parse_args()
 
     data = load_results()
@@ -127,6 +130,12 @@ def main():
     if args.dry_run:
         print("\n[DRY RUN] config.py not modified.")
         return
+
+    if not args.yes:
+        answer = input("\nApply these changes to config.py? [y/N] ").strip().lower()
+        if answer != "y":
+            print("Aborted.")
+            return
 
     # Backup
     backup = CFG_PATH + ".bak"

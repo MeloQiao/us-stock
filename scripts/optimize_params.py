@@ -473,7 +473,7 @@ def main():
         print(f"  📊 Expected out-of-sample Sharpe improvement:")
         print(f"     Composite: {comp_result['sharpe']:+.3f}")
 
-    # 5. Save JSON
+    # 5. Save JSON locally
     output = {
         "computed_at": datetime.today().strftime("%Y-%m-%d %H:%M"),
         "mode": "fast" if args.fast else "full",
@@ -489,7 +489,33 @@ def main():
     out_path = os.path.join(ROOT, "scripts", "optimal_params.json")
     with open(out_path, "w") as f:
         json.dump(output, f, indent=2)
-    print(f"\n  💾 Results saved to: {out_path}")
+    print(f"\n  💾 Results saved locally: {out_path}")
+
+    # 6. Save to HF Dataset (for history + full automation)
+    hf_token = os.getenv("HF_TOKEN", "")
+    hf_repo  = os.getenv("HF_DATASET_REPO", "")
+    if hf_token and hf_repo:
+        try:
+            from huggingface_hub import HfApi
+            api = HfApi(token=hf_token)
+            dated_path = f"params/us/optimal_params_{datetime.today().strftime('%Y-%m')}.json"
+            latest_path = "params/us/optimal_params_latest.json"
+            content = json.dumps(output, indent=2).encode()
+            for path in (dated_path, latest_path):
+                api.upload_file(
+                    path_or_fileobj=content,
+                    path_in_repo=path,
+                    repo_id=hf_repo,
+                    repo_type="dataset",
+                    commit_message=f"Monthly param optimization [{output['computed_at']}]",
+                )
+            print(f"  ☁️  Saved to HF Dataset: {latest_path}")
+            print(f"  ☁️  History copy:        {dated_path}")
+        except Exception as e:
+            print(f"  ⚠️  HF save failed (non-fatal): {e}")
+    else:
+        print("  ⚠️  HF_TOKEN/HF_DATASET_REPO not set — skipping HF upload")
+
     print(f"{'='*60}\n")
 
 
