@@ -168,12 +168,26 @@ FEATURE_COLS = [
 
 def _get_model():
     """
-    Return (model_class, fit_kwargs).
-    Prefers XGBoost; falls back to sklearn GradientBoosting.
+    Return a fitted-ready gradient boosting classifier.
+    Preference order: XGBoost → LightGBM → sklearn GradientBoosting.
+    Each candidate is tested with a tiny fit() to catch runtime dylib errors
+    (e.g. XGBoost on macOS without libomp) before committing to it.
     """
+    import numpy as np
+
+    def _quick_test(mdl):
+        """Return True if mdl.fit() works on a 4-sample toy dataset."""
+        try:
+            X = np.array([[0, 0], [1, 0], [0, 1], [1, 1]], dtype=float)
+            y = np.array([0, 1, 0, 1])
+            mdl.fit(X, y)
+            return True
+        except Exception:
+            return False
+
     try:
         from xgboost import XGBClassifier
-        model = XGBClassifier(
+        mdl = XGBClassifier(
             n_estimators=300,
             max_depth=4,
             learning_rate=0.05,
@@ -185,35 +199,40 @@ def _get_model():
             use_label_encoder=False,
             eval_metric="logloss",
             random_state=42,
-            n_jobs=-1,
+            n_jobs=1,
         )
-        logger.info("ML Regime: using XGBoost")
-        return model
-    except ImportError:
+        if _quick_test(mdl):
+            # Return a fresh unfitted instance (quick test consumed the previous one)
+            logger.info("ML Regime: using XGBoost")
+            return XGBClassifier(
+                n_estimators=300, max_depth=4, learning_rate=0.05,
+                subsample=0.8, colsample_bytree=0.8, min_child_weight=10,
+                reg_alpha=0.1, reg_lambda=1.0, use_label_encoder=False,
+                eval_metric="logloss", random_state=42, n_jobs=1,
+            )
+    except Exception:
         pass
 
     try:
         from lightgbm import LGBMClassifier
-        model = LGBMClassifier(
-            n_estimators=300,
-            max_depth=4,
-            learning_rate=0.05,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            min_child_samples=20,
-            reg_alpha=0.1,
-            reg_lambda=1.0,
-            random_state=42,
-            n_jobs=-1,
-            verbose=-1,
+        mdl = LGBMClassifier(
+            n_estimators=300, max_depth=4, learning_rate=0.05,
+            subsample=0.8, colsample_bytree=0.8, min_child_samples=20,
+            reg_alpha=0.1, reg_lambda=1.0, random_state=42, n_jobs=1, verbose=-1,
         )
-        logger.info("ML Regime: using LightGBM")
-        return model
-    except ImportError:
+        if _quick_test(mdl):
+            logger.info("ML Regime: using LightGBM")
+            return LGBMClassifier(
+                n_estimators=300, max_depth=4, learning_rate=0.05,
+                subsample=0.8, colsample_bytree=0.8, min_child_samples=20,
+                reg_alpha=0.1, reg_lambda=1.0, random_state=42, n_jobs=1, verbose=-1,
+            )
+    except Exception:
         pass
 
     from sklearn.ensemble import GradientBoostingClassifier
-    model = GradientBoostingClassifier(
+    logger.info("ML Regime: using sklearn GradientBoosting (xgboost/lgbm not available)")
+    return GradientBoostingClassifier(
         n_estimators=200,
         max_depth=3,
         learning_rate=0.05,
@@ -221,8 +240,6 @@ def _get_model():
         min_samples_leaf=20,
         random_state=42,
     )
-    logger.info("ML Regime: using sklearn GradientBoosting (xgboost/lgbm not found)")
-    return model
 
 
 def _fill_missing(X: pd.DataFrame) -> pd.DataFrame:
@@ -524,35 +541,36 @@ class MLRegimeClassifier:
     @staticmethod
     def to_position_multiplier(
         prob: float,
-        min_mult: float = 0.2,
+        min_mult: float = 0.25,
         max_mult: float = 1.0,
-        bullish_threshold: float = 0.55,
-        bearish_threshold: float = 0.40,
+        bull_threshold: float = 0.55,
+        bear_threshold: float = 0.45,
     ) -> float:
         """
-        Convert probability to a position size multiplier.
+        Convert ML probability to a position size multiplier.
 
-        Logic:
-          prob > bullish_threshold → scale up toward max_mult (1.0)
-          prob < bearish_threshold → scale down toward min_mult (0.2)
-          in between              → linear interpolation
+        Design principle: the ML layer acts as a "risk-off" tool only.
+          - Neutral / bullish zone (prob ≥ 0.45): multiplier = 1.0 (no change)
+          - Bearish zone (prob < 0.45):           scale down linearly to min_mult
+            prob = 0.45 → 1.0
+            prob = 0.00 → min_mult (0.25)
+
+        This ensures that when the model has no strong view (prob ~0.5) we do
+        NOT inadvertently reduce position sizes.  The multiplier only kicks in
+        when the model is genuinely bearish.
 
         Returns
         -------
-        float in [min_mult, max_mult]
+        float in [min_mult, 1.0]
         """
-        if prob >= bullish_threshold:
-            # Linear 0.55→1.0 maps to max_mult
-            t = min((prob - bullish_threshold) / (1.0 - bullish_threshold), 1.0)
-            return round(min_mult + (max_mult - min_mult) * (0.5 + 0.5 * t), 3)
-        elif prob <= bearish_threshold:
-            # Linear 0.40→0.0 maps to min_mult
-            t = min((bearish_threshold - prob) / bearish_threshold, 1.0)
-            return round(min_mult + (max_mult - min_mult) * (0.5 - 0.5 * t), 3)
+        prob = float(np.clip(prob, 0.0, 1.0))
+        if prob >= bear_threshold:
+            return max_mult                                    # neutral / bullish → no change
         else:
-            # Neutral zone: prob in [0.40, 0.55] → 0.5× to ~0.75×
-            t = (prob - bearish_threshold) / (bullish_threshold - bearish_threshold)
-            return round(min_mult + (max_mult - min_mult) * (0.3 + 0.4 * t), 3)
+            # Linear: bear_threshold → 1.0, 0.0 → min_mult
+            t = (bear_threshold - prob) / bear_threshold       # 0 at threshold, 1 at prob=0
+            t = min(t, 1.0)
+            return round(max_mult - (max_mult - min_mult) * t, 3)
 
     def describe(self) -> dict:
         """Return a human-readable summary of the loaded model."""
