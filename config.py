@@ -261,6 +261,78 @@ LEVERAGED_ETFS = {"TQQQ", "SQQQ", "SPXL", "SOXL", "SOXS", "UVXY", "07226", "0755
 # Inverse/short ETFs: VIX signal is flipped — high VIX = BUY, low VIX = SELL
 INVERSE_ETFS = {"SQQQ", "SOXS", "07552"}
 
+# 3x leveraged LONG ETFs — subject to strict entry conditions (see below)
+LEVERAGED_LONG_ETFS: set[str] = {"TQQQ", "SPXL", "SOXL", "07226", "07500"}
+
+# ── Per-symbol hard position cap (fraction of total portfolio) ────────────
+# Symbols not listed use the tier cap from TIER_MAX_POSITION.
+# Applied AFTER portfolio optimisation + 3-layer multipliers.
+SYMBOL_MAX_POSITION: dict[str, float] = {
+    # 3x leveraged long — strict cap regardless of signal strength
+    "TQQQ": 0.15,  "SPXL": 0.15,  "SOXL": 0.15,
+    "07226": 0.10, "07500": 0.10,
+    # Inverse / short — tactical only, small size
+    "SQQQ": 0.10,  "SOXS": 0.10,  "07552": 0.10,
+    # Extreme volatility / VIX derivative
+    "UVXY": 0.05,
+    # Speculative / crypto proxy / extreme beta
+    "MSTR": 0.08,  "COIN": 0.08,  "SMCI": 0.08,  "RKLB": 0.08,
+    # Poor strategy-signal fit (energy sector underperforms in backtest)
+    "XOM":  0.10,  "CVX":  0.10,  "XLE":  0.10,
+}
+
+# ── Symbol quality tier ───────────────────────────────────────────────────
+# Based on 20-yr backtest strategy CAGR and signal consistency.
+#   A  high signal quality  → up to 25% per position
+#   B  normal quality       → up to 20%
+#   C  poor signal fit      → capped at 10%
+#   S  speculative          → capped at 8%
+SYMBOL_QUALITY_TIER: dict[str, str] = {
+    # Tier A — strategy CAGR > 9%, clean trend signals
+    "NVDA": "A", "TSLA": "A", "AAPL": "A",
+    "QQQ":  "A", "SPY":  "A", "SMH":  "A",
+    # Tier B — decent signal, strategy CAGR 4–9%
+    "MSFT": "B", "GOOGL": "B", "AMZN": "B", "META": "B",
+    "JPM":  "B", "AVGO":  "B", "AMD":  "B",
+    "PLTR": "B", "CRWD":  "B", "GLD":  "B",
+    "TLT":  "B", "IWM":   "B", "DIA":  "B",
+    "IBIT": "B", "CEG":   "B", "VST":  "B",
+    # Tier C — strategy consistently underperforms, signal unreliable
+    "XOM":  "C", "CVX":  "C", "XLE":  "C",
+    "ICLN": "C", "ARKK": "C",
+    # Tier S — speculative, max 8%, needs very high composite score
+    "MSTR": "S", "COIN": "S", "SMCI": "S", "RKLB": "S", "UVXY": "S",
+}
+
+# Maximum portfolio fraction by quality tier
+TIER_MAX_POSITION: dict[str, float] = {
+    "A": 0.25,   # up to 25% of portfolio
+    "B": 0.20,   # up to 20%
+    "C": 0.10,   # capped at 10%
+    "S": 0.08,   # capped at  8%
+}
+
+# ── Per-symbol minimum composite score to enter ───────────────────────────
+# Overrides the global graduated floor (2.5) for specific symbols.
+# Symbols not listed use the graduated floor: ≥2.5 → 25%, ≥4.5 → 50% …
+SYMBOL_MIN_SCORE: dict[str, float] = {
+    # 3x leveraged long — require strong consensus before entry
+    "TQQQ": 7.0, "SPXL": 7.0, "SOXL": 7.0, "07226": 7.0, "07500": 7.0,
+    # Speculative — very high bar, full-conviction only
+    "MSTR": 7.5, "COIN": 7.5, "SMCI": 7.5,
+    "RKLB": 7.0, "UVXY": 7.0,
+    # Poor signal fit — no graduated half-entry, require standard BUY signal
+    "XOM": 6.0, "CVX": 6.0, "XLE": 6.0, "ICLN": 6.0, "ARKK": 6.0,
+}
+
+# ── Leveraged-long strict entry conditions ────────────────────────────────
+# TQQQ / SPXL / SOXL require ALL four conditions simultaneously.
+# If any fails the symbol is removed from buy_candidates for that day.
+LEVERAGED_LONG_MIN_SCORE:            float = 7.0   # vs standard 6.0
+LEVERAGED_LONG_REQUIRE_SHIELD_NONE:  bool  = True  # CrashShield must be NONE (not CAUTION)
+LEVERAGED_LONG_MIN_ML_MULT:          float = 0.80  # ML clearly bullish (≥80% position multiplier)
+LEVERAGED_LONG_REQUIRE_ABS_MOM:      bool  = True  # SPY 12-month return must be positive
+
 # ── Strategy weights (used by composite scoring) ─────────────────────────
 # Each strategy contributes its weight to the composite score.
 # Default: all equal (1). Increase a weight to give that strategy more influence.
@@ -296,7 +368,7 @@ STRATEGY_PARAMS = {
     "rsi": {"period": 14, "oversold": 25, "overbought": 75},
     "bollinger": {"period": 20, "std_dev": 1.5, "squeeze_threshold": 0.1},
     "vix": {"fear_threshold": 30, "greed_threshold": 15},
-    "composite": {"buy_threshold": 6, "sell_threshold": 3.0},
+    "composite": {"buy_threshold": 6, "sell_threshold": 5.0},
 }
 
 # ── Data settings ─────────────────────────────────────────────────────────

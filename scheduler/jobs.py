@@ -30,6 +30,16 @@ from config import (
     ALPACA_API_KEY,
     VIRTUAL_PORTFOLIO_CAPITAL,
     VIRTUAL_PORTFOLIO_CURRENCY,
+    # Symbol-level risk rules
+    LEVERAGED_LONG_ETFS,
+    LEVERAGED_LONG_MIN_SCORE,
+    LEVERAGED_LONG_REQUIRE_SHIELD_NONE,
+    LEVERAGED_LONG_MIN_ML_MULT,
+    LEVERAGED_LONG_REQUIRE_ABS_MOM,
+    SYMBOL_MAX_POSITION,
+    SYMBOL_QUALITY_TIER,
+    TIER_MAX_POSITION,
+    SYMBOL_MIN_SCORE,
 )
 
 logger = logging.getLogger(__name__)
@@ -234,12 +244,71 @@ def run_daily_pipeline(market: Market = "us") -> dict:
             logger.warning("[us] DualMomentum failed: %s", e)
 
     # ── 2b. Portfolio optimization ────────────────────────────────────
+    #
+    # Direction 1: Graduated position sizing
+    # score ≥ 7.5 → 100%  ≥ 6.0 → 80%  ≥ 4.5 → 50%  ≥ 2.5 → 25%  else → 0%
+    # Also includes score ≥ 4.5 symbols even when composite signal is HOLD (0),
+    # unless blocked by CrashShield SHIELD.
+    # Note: Direction 2 (sell_threshold -3 → -5) is handled by config.py.
+    #
+    def _score_to_fraction(score: float) -> float:
+        """Map composite score to graduated position fraction (Direction 1)."""
+        if score >= 7.5:   return 1.00
+        elif score >= 6.0: return 0.80
+        elif score >= 4.5: return 0.50
+        elif score >= 2.5: return 0.25
+        return 0.0
+
+    shield_active = crash_shield_result.get("level") == "SHIELD"
+
     from portfolio.optimizer import optimize_portfolio
-    buy_candidates = {
-        sym: composite_scores[sym]
-        for sym, sig in gated_signals.items()
-        if sig == 1
-    }
+    buy_candidates: dict[str, float] = {}
+    for sym, sig in gated_signals.items():
+        raw_score = composite_scores.get(sym, 0.0)
+        # Per-symbol minimum score override (e.g. TQQQ≥7.0, MSTR≥7.5, XOM≥6.0)
+        sym_min   = SYMBOL_MIN_SCORE.get(sym, 2.5)
+
+        if sig == 1 and raw_score >= sym_min:
+            buy_candidates[sym] = raw_score
+        elif sig == 1 and raw_score < sym_min:
+            logger.info("[%s] %s skipped: score %.1f below sym_min %.1f",
+                        market, sym, raw_score, sym_min)
+        # Graduated half-entry: score ≥ max(4.5, sym_min) and signal is HOLD
+        elif sig == 0 and raw_score >= max(4.5, sym_min) and not shield_active:
+            buy_candidates[sym] = raw_score
+
+    # ── Leveraged-long strict four-condition gate (TQQQ / SPXL / SOXL) ───────
+    # All four conditions must pass simultaneously; any failure blocks entry.
+    if market == "us":
+        _shield_ok = (
+            not LEVERAGED_LONG_REQUIRE_SHIELD_NONE
+            or crash_shield_result.get("level") == "NONE"
+        )
+        _ml_ok  = ml_multiplier >= LEVERAGED_LONG_MIN_ML_MULT
+        _mom_ok = (
+            not LEVERAGED_LONG_REQUIRE_ABS_MOM
+            or dm_result.get("abs_momentum_ok", True)
+        )
+        _lev_long_all_ok = _shield_ok and _ml_ok and _mom_ok
+
+        for sym in list(buy_candidates.keys()):
+            if sym in LEVERAGED_LONG_ETFS:
+                score = buy_candidates[sym]
+                if not _lev_long_all_ok or score < LEVERAGED_LONG_MIN_SCORE:
+                    logger.info(
+                        "[us] Lev-long gate BLOCKED %s: score=%.1f "
+                        "shield_ok=%s ml_ok=%s(%.2f) mom_ok=%s",
+                        sym, score, _shield_ok, _ml_ok, ml_multiplier, _mom_ok,
+                    )
+                    del buy_candidates[sym]
+                else:
+                    logger.info(
+                        "[us] Lev-long gate PASSED %s: score=%.1f "
+                        "shield=%s ml=%.2f mom=%s",
+                        sym, score,
+                        crash_shield_result.get("level"), ml_multiplier, _mom_ok,
+                    )
+
     portfolio_weights: dict[str, float] = {}
     if buy_candidates:
         try:
@@ -255,19 +324,23 @@ def run_daily_pipeline(market: Market = "us") -> dict:
         except Exception as e:
             logger.warning("[%s] Portfolio optimisation failed: %s — using score weights", market, e)
 
-    # ── 2c. Combine 3-layer multipliers into portfolio_weights (US only) ─
+    # ── 2c. Combine graduated fraction + 3-layer multipliers ─────────────
     #
-    # Combined = CrashShield_mult × ML_mult × DualMomentum_per_symbol_mult
-    # Applied as a scaling factor to portfolio_weights before execution.
+    # Combined = GraduatedFraction × CrashShield_mult × ML_mult × DM_per_symbol_mult
     # HK/CN only use crash_shield and ml_regime (no SPY-based dual momentum).
     #
     if market == "us" and portfolio_weights:
         cs_pos_mult = crash_shield_result.get("position_multiplier", 1.0)
+        grad_fractions: dict[str, float] = {}
         for sym in list(portfolio_weights.keys()):
-            dm_m = dm_multipliers.get(sym, 1.0)
-            combined = cs_pos_mult * ml_multiplier * dm_m
+            raw_score = composite_scores.get(sym, 0.0)
+            grad_frac = _score_to_fraction(raw_score)
+            dm_m      = dm_multipliers.get(sym, 1.0)
+            combined  = grad_frac * cs_pos_mult * ml_multiplier * dm_m
             portfolio_weights[sym] = round(portfolio_weights[sym] * combined, 4)
+            grad_fractions[sym] = grad_frac
         summary["combined_multipliers"] = {
+            "graduated_fractions": {s: round(f, 2) for s, f in grad_fractions.items()},
             "crash_shield": cs_pos_mult,
             "ml_regime":    round(ml_multiplier, 3),
             "dual_momentum_avg": round(
@@ -275,10 +348,39 @@ def run_daily_pipeline(market: Market = "us") -> dict:
             ),
         }
         logger.info(
-            "[us] Combined position multipliers: CS=%.2f ML=%.3f DM_avg=%.2f",
+            "[us] Combined position multipliers: grad=%s CS=%.2f ML=%.3f DM_avg=%.2f",
+            {s: f"{f:.0%}" for s, f in grad_fractions.items()},
             cs_pos_mult, ml_multiplier,
             sum(dm_multipliers.values()) / max(len(dm_multipliers), 1),
         )
+
+    # ── 2d. Per-symbol position caps (quality tier + hard overrides) ──────
+    #
+    # Applied after all multipliers so the final weight never exceeds:
+    #   min(TIER_MAX_POSITION[tier], SYMBOL_MAX_POSITION.get(sym, tier_cap))
+    #
+    # Tier caps:  A→25%  B→20%  C→10%  S→8%
+    # Hard caps:  TQQQ→15%  MSTR→8%  XOM→10%  UVXY→5%  …
+    # After capping, renormalize if total > 100%.
+    if portfolio_weights:
+        capped: dict[str, str] = {}
+        for sym in list(portfolio_weights.keys()):
+            tier     = SYMBOL_QUALITY_TIER.get(sym, "B")
+            tier_cap = TIER_MAX_POSITION.get(tier, 0.20)
+            sym_cap  = SYMBOL_MAX_POSITION.get(sym, tier_cap)
+            cap      = min(tier_cap, sym_cap)
+            if portfolio_weights[sym] > cap:
+                capped[sym] = f"{portfolio_weights[sym]*100:.1f}%→{cap*100:.0f}%"
+                portfolio_weights[sym] = cap
+        if capped:
+            logger.info("[%s] Position caps applied: %s", market, capped)
+            total_w = sum(portfolio_weights.values())
+            if total_w > 1.0:
+                portfolio_weights = {
+                    s: round(w / total_w, 4) for s, w in portfolio_weights.items()
+                }
+            summary["portfolio_weights"]  = portfolio_weights
+            summary["position_caps_hit"]  = capped
 
     # ── 3. Paper / virtual trade ──────────────────────────────────────
     trade_results: list = []
