@@ -1,0 +1,131 @@
+name: Train ML Regime Classifier
+
+# Runs on the 2nd of every month at 06:00 UTC (day after optimize_params)
+# Full automation:
+#   1. Train XGBoost regime classifier on 15yr SPY/VIX/HYG history
+#   2. Evaluate walk-forward OOS accuracy + AUC
+#   3. Upload model + meta to HF Dataset
+#   4. Notify Feishu with training results
+
+on:
+  schedule:
+    - cron: "0 6 2 * *"    # 2nd of every month, 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      fast:
+        description: "Fast mode (10yr, skip HYG)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install xgboost lightgbm scikit-learn
+
+      # ── Step 1: Train model ────────────────────────────────────────────
+      - name: Train ML Regime Classifier
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+        run: |
+          if [ "${{ github.event.inputs.fast }}" = "true" ]; then
+            python3 scripts/train_ml_regime.py --fast
+          else
+            python3 scripts/train_ml_regime.py
+          fi
+
+      # ── Step 2: Upload artifact ────────────────────────────────────────
+      - name: Upload model artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ml_regime_model_${{ github.run_id }}
+          path: |
+            models/ml_regime_model.pkl
+            models/ml_regime_meta.json
+          retention-days: 90
+
+      # ── Step 3: Feishu notification ────────────────────────────────────
+      - name: Notify Feishu
+        if: always()
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, httpx
+          from datetime import datetime
+
+          url = os.getenv("FEISHU_WEBHOOK_URL", "")
+          if not url:
+              print("No Feishu webhook — skip")
+              exit(0)
+
+          try:
+              with open("models/ml_regime_meta.json") as f:
+                  meta = json.load(f)
+
+              avg_acc = meta.get("avg_accuracy", 0)
+              avg_auc = meta.get("avg_auc", 0)
+              n_train = meta.get("n_train", 0)
+              mode    = meta.get("mode", "full")
+              windows = meta.get("oos_windows", [])
+
+              win_lines = []
+              for w in windows:
+                  win_lines.append(
+                      f"  {w['test_start'][:7]}–{w['test_end'][:7]}: "
+                      f"Acc={w['accuracy']:.3f} AUC={w['auc']:.3f} n={w['n_test']}"
+                  )
+
+              # Grade the model quality
+              if avg_auc >= 0.62:
+                  grade = "🟢 优秀"
+              elif avg_auc >= 0.57:
+                  grade = "🟡 良好"
+              else:
+                  grade = "🔴 一般(仅供参考)"
+
+              text = (
+                  f"[US Stock Monitor] 🤖 ML制度分类器月度训练完成 {datetime.now().strftime('%Y-%m-%d')}\n"
+                  f"模式: {mode}  |  训练样本: {n_train:,}天\n"
+                  f"\n📊 样本外验证窗口:\n" + "\n".join(win_lines) +
+                  f"\n\n平均准确率: {avg_acc:.3f}  |  平均AUC: {avg_auc:.3f}  {grade}"
+                  f"\n✅ 模型已上传至 HF Dataset，今日 pipeline 将使用新模型"
+              )
+
+              httpx.post(url, json={
+                  "msg_type": "text",
+                  "content": {"text": text}
+              }, timeout=10)
+              print("Feishu notified:", text)
+
+          except FileNotFoundError:
+              fallback = "[US Stock Monitor] ⚠️ ML制度分类器训练失败，请检查 GitHub Actions 日志"
+              try:
+                  httpx.post(url, json={
+                      "msg_type": "text",
+                      "content": {"text": fallback}
+                  }, timeout=10)
+              except Exception:
+                  pass
+              print("Training output not found — sent failure notice")
+          except Exception as e:
+              print(f"Feishu notify failed: {e}")
+          EOF

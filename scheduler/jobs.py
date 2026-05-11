@@ -112,6 +112,51 @@ def run_daily_pipeline(market: Market = "us") -> dict:
     summary["regime"] = regime_info.get("regime")
     logger.info("[%s] Regime: %s — %s", market, regime_info["regime"], regime_info["reason"])
 
+    # ── 1c-extra. Layer 1 — Crash Shield (rule-based macro protection) ─
+    crash_shield_result = {"level": "NONE", "score": 0, "position_multiplier": 1.0}
+    if market == "us":
+        try:
+            from strategies.crash_shield import evaluate_crash_shield
+            hyg_data = fetch_multiple(["HYG"], years=HISTORY_YEARS, market="us", force_refresh=False)
+            hyg_df_cs = hyg_data.get("HYG")
+            spy_cs = data.get("SPY") or data.get(next(iter(data), None))
+            if spy_cs is not None:
+                crash_shield_result = evaluate_crash_shield(spy_cs, vix_df, hyg_df_cs)
+                summary["crash_shield"] = {
+                    "level": crash_shield_result["level"],
+                    "score": crash_shield_result["score"],
+                    "triggered": crash_shield_result.get("triggered", []),
+                }
+                logger.info("[us] CrashShield: %s (score=%d/4)",
+                            crash_shield_result["level"], crash_shield_result["score"])
+        except Exception as e:
+            logger.warning("[us] CrashShield evaluation failed: %s", e)
+
+    # ── 1c-extra. Layer 2 — ML Regime Classifier ──────────────────────
+    ml_prob = 0.5          # neutral default
+    ml_multiplier = 1.0
+    if market == "us":
+        try:
+            from strategies.ml_regime import MLRegimeClassifier
+            clf = MLRegimeClassifier()
+            loaded = clf.load(
+                hf_repo=HF_DATASET_REPO if HF_TOKEN else None,
+                hf_token=HF_TOKEN if HF_TOKEN else None,
+            )
+            if loaded:
+                spy_cs = data.get("SPY") or data.get(next(iter(data), None))
+                hyg_df_ml = hyg_data.get("HYG") if "hyg_data" in dir() else None
+                if spy_cs is not None:
+                    ml_prob = clf.predict_proba_latest(spy_cs, vix_df, hyg_df_ml)
+                    ml_multiplier = clf.to_position_multiplier(ml_prob)
+                    summary["ml_regime"] = {
+                        "prob": round(ml_prob, 3),
+                        "multiplier": round(ml_multiplier, 3),
+                    }
+                    logger.info("[us] ML Regime: prob=%.3f mult=%.3f", ml_prob, ml_multiplier)
+        except Exception as e:
+            logger.warning("[us] ML Regime failed: %s", e)
+
     # ── 1c. Load regime-specific strategy weights (from walk-forward optimizer) ─
     from strategies.walk_forward_optimizer import get_regime_weights
     strategy_weights = get_regime_weights(
@@ -155,6 +200,39 @@ def run_daily_pipeline(market: Market = "us") -> dict:
     # Apply regime gate — blocks new buys in bear market
     gated_signals = apply_regime_gate(composite_signals, regime_info)
 
+    # ── 2b-extra. Layer 1 gate — Crash Shield blocks new buys in SHIELD ─
+    if crash_shield_result["level"] == "SHIELD":
+        gated_signals = {
+            sym: (0 if sig == 1 else sig)
+            for sym, sig in gated_signals.items()
+        }
+        logger.info("[%s] CrashShield SHIELD: all new buy signals blocked", market)
+    elif crash_shield_result["level"] == "CAUTION":
+        logger.info("[%s] CrashShield CAUTION: new positions will be halved", market)
+
+    # ── 2b-extra. Layer 3 — Dual Momentum filter ─────────────────────
+    dm_result: dict = {}
+    dm_multipliers: dict[str, float] = {}
+    if market == "us":
+        try:
+            from strategies.dual_momentum import apply_dual_momentum
+            spy_dm = data.get("SPY") or data.get(next(iter(data), None))
+            if spy_dm is not None:
+                gated_signals, dm_multipliers, dm_result = apply_dual_momentum(
+                    gated_signals, spy_dm, data,
+                )
+                summary["dual_momentum"] = {
+                    "abs_momentum_ok": dm_result.get("abs_momentum_ok"),
+                    "spy_12m_ret":     dm_result.get("spy_12m_ret"),
+                    "crash_protect":   dm_result.get("crash_protect"),
+                    "position_scale":  dm_result.get("position_scale"),
+                }
+                logger.info("[us] DualMomentum: scale=%.2f crash=%s",
+                            dm_result.get("position_scale", 1.0),
+                            dm_result.get("crash_protect", False))
+        except Exception as e:
+            logger.warning("[us] DualMomentum failed: %s", e)
+
     # ── 2b. Portfolio optimization ────────────────────────────────────
     from portfolio.optimizer import optimize_portfolio
     buy_candidates = {
@@ -176,6 +254,31 @@ def run_daily_pipeline(market: Market = "us") -> dict:
                         {s: f"{w:.1%}" for s, w in portfolio_weights.items()})
         except Exception as e:
             logger.warning("[%s] Portfolio optimisation failed: %s — using score weights", market, e)
+
+    # ── 2c. Combine 3-layer multipliers into portfolio_weights (US only) ─
+    #
+    # Combined = CrashShield_mult × ML_mult × DualMomentum_per_symbol_mult
+    # Applied as a scaling factor to portfolio_weights before execution.
+    # HK/CN only use crash_shield and ml_regime (no SPY-based dual momentum).
+    #
+    if market == "us" and portfolio_weights:
+        cs_pos_mult = crash_shield_result.get("position_multiplier", 1.0)
+        for sym in list(portfolio_weights.keys()):
+            dm_m = dm_multipliers.get(sym, 1.0)
+            combined = cs_pos_mult * ml_multiplier * dm_m
+            portfolio_weights[sym] = round(portfolio_weights[sym] * combined, 4)
+        summary["combined_multipliers"] = {
+            "crash_shield": cs_pos_mult,
+            "ml_regime":    round(ml_multiplier, 3),
+            "dual_momentum_avg": round(
+                sum(dm_multipliers.values()) / max(len(dm_multipliers), 1), 3
+            ),
+        }
+        logger.info(
+            "[us] Combined position multipliers: CS=%.2f ML=%.3f DM_avg=%.2f",
+            cs_pos_mult, ml_multiplier,
+            sum(dm_multipliers.values()) / max(len(dm_multipliers), 1),
+        )
 
     # ── 3. Paper / virtual trade ──────────────────────────────────────
     trade_results: list = []
@@ -244,6 +347,16 @@ def run_daily_pipeline(market: Market = "us") -> dict:
                 vix_value = float(vix_df["Close"].iloc[-1])
 
             signal_list = build_signal_list(all_results, STRATEGY_LABELS)
+
+            # Build extra_info for 3-layer status banners (US only)
+            feishu_extra = None
+            if market == "us":
+                feishu_extra = {
+                    "crash_shield": summary.get("crash_shield", {}),
+                    "ml_regime":    summary.get("ml_regime", {}),
+                    "dual_momentum": summary.get("dual_momentum", {}),
+                }
+
             ok = send_signal_alert(
                 FEISHU_WEBHOOK_URL, signal_list,
                 vix_value=vix_value,
@@ -252,6 +365,7 @@ def run_daily_pipeline(market: Market = "us") -> dict:
                 market=market,
                 regime_info=regime_info,
                 price_info=price_info if price_info else None,
+                extra_info=feishu_extra,
             )
             summary["feishu_sent"] = ok
         except Exception as e:

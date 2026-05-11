@@ -10,3 +10,7 @@ build/
 venv/
 *.sqlite
 *.db
+
+# ML model binaries (large files — stored in HF Dataset instead)
+models/*.pkl
+config.py.bak

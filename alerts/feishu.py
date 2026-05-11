@@ -84,6 +84,7 @@ def _build_signal_card(
     market: str = "us",
     regime_info: Optional[dict] = None,
     price_info: Optional[dict] = None,
+    extra_info: Optional[dict] = None,
 ) -> dict:
     """
     Build a Feishu interactive card payload.
@@ -139,6 +140,48 @@ def _build_signal_card(
             },
         })
         elements.append({"tag": "hr"})
+
+    # ── 3-Layer protection status (US only) ──────────────────────────────
+    if extra_info and market == "us":
+        lines = []
+
+        # Layer 1: Crash Shield
+        cs = extra_info.get("crash_shield", {})
+        cs_level = cs.get("level", "NONE")
+        cs_score = cs.get("score", 0)
+        cs_emoji = {"NONE": "🟢", "CAUTION": "🟡", "SHIELD": "🔴"}.get(cs_level, "⚪")
+        cs_label = {"NONE": "正常", "CAUTION": "警惕", "SHIELD": "防御"}.get(cs_level, cs_level)
+        triggered = cs.get("triggered", [])
+        trig_str  = f" 触发:{','.join(triggered)}" if triggered else ""
+        lines.append(f"**🛡️ 崩盘护盾**: {cs_emoji} {cs_label} ({cs_score}/4){trig_str}")
+
+        # Layer 2: ML Regime
+        ml = extra_info.get("ml_regime", {})
+        if ml:
+            ml_prob = ml.get("prob", 0.5)
+            ml_mult = ml.get("multiplier", 1.0)
+            ml_emoji = "🟢" if ml_prob >= 0.6 else ("🔴" if ml_prob <= 0.4 else "🟡")
+            lines.append(
+                f"**🤖 ML 制度**: {ml_emoji} 看多概率 {ml_prob*100:.0f}%  →  仓位系数 ×{ml_mult:.2f}"
+            )
+
+        # Layer 3: Dual Momentum
+        dm = extra_info.get("dual_momentum", {})
+        if dm:
+            abs_ok      = dm.get("abs_momentum_ok", True)
+            spy12m      = dm.get("spy_12m_ret", 0.0)
+            crash_prot  = dm.get("crash_protect", False)
+            dm_scale    = dm.get("position_scale", 1.0)
+            abs_str     = f"✅ SPY 12M {spy12m*100:+.1f}%" if abs_ok else f"❌ SPY 12M {spy12m*100:+.1f}% (屏蔽做多)"
+            crash_str   = "  ⚡ 动量崩溃保护触发" if crash_prot else ""
+            lines.append(f"**📈 双动量**: {abs_str}{crash_str}  |  全局规模 ×{dm_scale:.2f}")
+
+        if lines:
+            elements.append({
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": "\n".join(lines)},
+            })
+            elements.append({"tag": "hr"})
 
     # ── Per-symbol signal breakdown ───────────────────────────────────────
     symbol_map: dict[str, list[dict]] = {}
@@ -277,6 +320,7 @@ def send_signal_alert(
     market: str = "us",
     regime_info: Optional[dict] = None,
     price_info: Optional[dict] = None,
+    extra_info: Optional[dict] = None,
 ) -> bool:
     """
     Send strategy signal alert to Feishu group via webhook.
@@ -289,6 +333,7 @@ def send_signal_alert(
     date              : date string, defaults to today
     trades            : paper/virtual trade orders (optional)
     portfolio_summary : portfolio NAV + positions snapshot (optional)
+    extra_info        : optional dict with crash_shield, ml_regime, dual_momentum status
     """
     if not webhook_url:
         logger.warning("Feishu webhook URL not configured.")
@@ -300,6 +345,7 @@ def send_signal_alert(
         trades=trades, portfolio_summary=portfolio_summary,
         market=market, regime_info=regime_info,
         price_info=price_info,
+        extra_info=extra_info,
     )
 
     try:
