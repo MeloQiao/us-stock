@@ -242,9 +242,19 @@ def _get_model():
     )
 
 
-def _fill_missing(X: pd.DataFrame) -> pd.DataFrame:
-    """Fill NaNs with column median (robust to missing VIX/HYG data)."""
-    return X.fillna(X.median())
+def _fill_missing(X: pd.DataFrame, fallback_medians: dict | None = None) -> pd.DataFrame:
+    """
+    Fill NaNs with column median.
+    If X has only one row (inference), column-wise median = NaN for NaN cols.
+    Use fallback_medians (from training distribution) in that case.
+    """
+    result = X.fillna(X.median())
+    if fallback_medians and result.isnull().any(axis=None):
+        # Single-row or all-NaN column: use training median
+        fb = pd.Series(fallback_medians)
+        result = result.fillna(fb)
+    # Final safety: replace any remaining NaN with 0
+    return result.fillna(0.0)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -331,7 +341,10 @@ def walk_forward_train(
     logger.info("Final model trained on %d rows. OOS avg acc=%.3f  auc=%.3f",
                 len(full), avg_acc, avg_auc)
 
-    pipeline = {"scaler": scaler, "model": final_mdl}
+    # Store training medians so inference works even with short history
+    train_medians = X_full.median().to_dict()
+
+    pipeline = {"scaler": scaler, "model": final_mdl, "medians": train_medians}
     meta = {
         "oos_windows": oos_results,
         "avg_accuracy": avg_acc,
@@ -524,9 +537,14 @@ class MLRegimeClassifier:
         try:
             df = build_features(spy_df, vix_df, hyg_df, include_target=False)
             latest = df.iloc[-1:][FEATURE_COLS]
-            latest = _fill_missing(latest)
 
-            if latest.isnull().all(axis=None):
+            # Use training-distribution medians for NaN imputation
+            # (avoids NaN when history is shorter than longest lookback, e.g. 252d)
+            stored_medians = self._pipeline.get("medians")
+            latest = _fill_missing(latest, fallback_medians=stored_medians)
+
+            if latest.isnull().any(axis=None):
+                logger.warning("ML Regime: still has NaN after imputation — returning 0.5")
                 return 0.5
 
             scaler = self._pipeline["scaler"]
