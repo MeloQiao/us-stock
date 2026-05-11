@@ -1,0 +1,52 @@
+{
+  "oos_windows": [
+    {
+      "test_start": "2017-01-01",
+      "test_end": "2018-12-31",
+      "accuracy": 0.5358565737051793,
+      "auc": 0.473844696969697,
+      "n_test": 502
+    },
+    {
+      "test_start": "2020-01-01",
+      "test_end": "2021-12-31",
+      "accuracy": 0.4871287128712871,
+      "auc": 0.5420562770562771,
+      "n_test": 505
+    },
+    {
+      "test_start": "2022-01-01",
+      "test_end": "2025-12-31",
+      "accuracy": 0.5752741774675972,
+      "auc": 0.4264136673043556,
+      "n_test": 1003
+    }
+  ],
+  "avg_accuracy": 0.5327531546813545,
+  "avg_auc": 0.48077154711010994,
+  "n_train": 3519,
+  "feature_cols": [
+    "price_to_ma20",
+    "price_to_ma50",
+    "price_to_ma200",
+    "ma50_to_ma200",
+    "ret_1m",
+    "ret_3m",
+    "ret_6m",
+    "ret_12m",
+    "drawdown",
+    "vol_21",
+    "vol_63",
+    "vol_ratio",
+    "rsi_14",
+    "vix",
+    "vix_vs_ma20",
+    "vix_percentile",
+    "vix_ret_5d",
+    "hyg_ret_20d",
+    "hyg_vs_ma50"
+  ],
+  "computed_at": "2026-05-11 09:15",
+  "mode": "full",
+  "years": 15
+}

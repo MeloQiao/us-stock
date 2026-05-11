@@ -1,7 +1,7 @@
 """
 Layer 2: ML Regime Classifier — XGBoost-based market state predictor
 
-Predicts P(SPY 20-day forward return > 0) from macro + technical features.
+Predicts P(market is in a good regime) from macro + technical features.
 Used as an additional position-sizing multiplier layered on top of the
 rule-based Crash Shield (Layer 1).
 
@@ -16,7 +16,16 @@ Training:
     Window 1: train 2009-2016  / test 2017-2018
     Window 2: train 2009-2019  / test 2020-2021
     Window 3: train 2009-2021  / test 2022-2025
-  Target: binary — SPY 20d forward return ≥ 0
+  Target (target_mode="v3", default):
+    y=0 (bearish) if: next 20d return < -1%  OR  currently 10%+ below 252d peak
+    y=1 (bullish) otherwise
+    Direction 3: intermediate corrections (10%+ drawdown) are now negative samples,
+    not just full bear-market returns.  Adds 2018 Q4 / 2020 / 2022 / 2015-16
+    as bearish training examples even on recovery-bounce days within those corrections.
+
+  Target (target_mode="v1", legacy):
+    y=1 if 20d forward return ≥ 0  (original, pure return-based)
+
   Model:  XGBoost (falls back to sklearn GradientBoosting if xgboost missing)
 
 Usage
@@ -25,7 +34,7 @@ Usage
   clf = MLRegimeClassifier()
   clf.load()                                           # from HF or local
   prob = clf.predict_proba_latest(spy_df, vix_df, hyg_df)
-  multiplier = clf.to_position_multiplier(prob)        # 0.3 – 1.0
+  multiplier = clf.to_position_multiplier(prob)        # 0.25 – 1.0
 """
 
 from __future__ import annotations
@@ -65,13 +74,14 @@ def build_features(
     vix_df: Optional[pd.DataFrame] = None,
     hyg_df: Optional[pd.DataFrame] = None,
     include_target: bool = True,
+    target_mode: str = "v3",
 ) -> pd.DataFrame:
     """
     Build the feature matrix (and optionally the target column).
 
     All features use only past data — no lookahead bias.
-    The target column `y` is spy.pct_change(20).shift(-20), which means
-    rows where `y` is NaN (last 20 trading days) must be dropped before training.
+    The target column `y` is based on spy forward returns; rows where `y`
+    is NaN (last 20 trading days) must be dropped before training.
 
     Parameters
     ----------
@@ -79,6 +89,17 @@ def build_features(
     vix_df         : VIX OHLCV (optional)
     hyg_df         : HYG OHLCV (optional)
     include_target : whether to compute the forward-return target column
+    target_mode    : "v3" (default) or "v1" (legacy)
+
+        "v1"  Original label — y=1 if 20d forward return ≥ 0.
+              ~35% bearish samples; model biased bullish in long bull markets.
+
+        "v3"  Direction 3 enhanced label — y=0 (bearish) when EITHER:
+                  • next 20d return < -1%, OR
+                  • currently ≥ 10% below the rolling 252d peak (in a correction)
+              Adding the correction clause makes 2018-Q4, 2020-COVID, 2022,
+              2015-16 all contribute negative examples even during bounce days,
+              giving a more balanced ~45% bearish sample rate.
 
     Returns
     -------
@@ -143,10 +164,27 @@ def build_features(
         f["hyg_ret_20d"] = np.nan
         f["hyg_vs_ma50"] = np.nan
 
-    # ── Target (20-day forward return, binary) ─────────────────────────────
+    # ── Target (20-day forward, binary) ────────────────────────────────────
     if include_target:
-        fwd = spy.pct_change(20).shift(-20)
-        f["y"] = (fwd >= 0).astype(int)
+        fwd = spy.pct_change(20).shift(-20)   # forward 20-day return at each bar
+
+        if target_mode == "v3":
+            # Direction 3: correction-aware label.
+            # bearish = next 20d return < 0  OR  currently ≥8% below 252d peak
+            # Keeps the same return threshold as v1 (fwd < 0) but adds
+            # intermediate corrections as extra negative training examples.
+            # Using 8% instead of 10% to capture 2015-16, 2018, 2020, 2022
+            # correction periods more robustly.
+            rolling_peak = spy.rolling(252, min_periods=50).max()
+            dd_from_peak = spy / (rolling_peak + 1e-9) - 1   # 0 = at peak, -0.15 = -15%
+            in_correction = dd_from_peak < -0.08              # 8%+ drawdown from 1yr high
+
+            bearish = (fwd < 0) | in_correction               # same return threshold as v1
+            f["y"]  = (~bearish).astype(float)
+            f.loc[fwd.isna(), "y"] = np.nan   # keep NaN for last 20 rows (no fwd data)
+        else:
+            # v1 legacy: pure forward-return label
+            f["y"] = (fwd >= 0).astype(int)
 
     return f
 
@@ -265,6 +303,7 @@ def walk_forward_train(
     spy_df: pd.DataFrame,
     vix_df: Optional[pd.DataFrame] = None,
     hyg_df: Optional[pd.DataFrame] = None,
+    target_mode: str = "v3",
 ) -> tuple:
     """
     Walk-forward training.  Returns (fitted_model, oos_accuracy, oos_df).
@@ -274,12 +313,14 @@ def walk_forward_train(
       W2: train 2009-2019 / OOS 2020-2021
       W3: train 2009-2021 / OOS 2022-2025
     Final model: retrained on full history (all data up to today – 20d).
+
+    target_mode: "v3" (default, correction-aware) or "v1" (legacy)
     """
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import Pipeline
     from sklearn.metrics import accuracy_score, roc_auc_score
 
-    df = build_features(spy_df, vix_df, hyg_df, include_target=True)
+    df = build_features(spy_df, vix_df, hyg_df, include_target=True, target_mode=target_mode)
     df = df.dropna(subset=["y"])                # drop last 20 days (target NaN)
     df = df.dropna(subset=FEATURE_COLS, how="all")
 
@@ -390,9 +431,13 @@ class MLRegimeClassifier:
         spy_df: pd.DataFrame,
         vix_df: Optional[pd.DataFrame] = None,
         hyg_df: Optional[pd.DataFrame] = None,
+        target_mode: str = "v3",
     ) -> dict:
-        """Train walk-forward model. Returns meta dict."""
-        pipeline, meta, _ = walk_forward_train(spy_df, vix_df, hyg_df)
+        """
+        Train walk-forward model. Returns meta dict.
+        target_mode: "v3" (direction 3, correction-aware) or "v1" (legacy)
+        """
+        pipeline, meta, _ = walk_forward_train(spy_df, vix_df, hyg_df, target_mode=target_mode)
         self._pipeline = pipeline
         self._meta     = meta
         self._trained  = True

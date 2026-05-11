@@ -14,3 +14,6 @@ venv/
 # ML model binaries (large files — stored in HF Dataset instead)
 models/*.pkl
 config.py.bak
+
+# Generated backtest HTML charts (re-created on each run)
+scripts/backtest_*.html

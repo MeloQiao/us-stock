@@ -86,9 +86,9 @@ def _fetch(ticker: str, start: str = "2005-01-01") -> pd.DataFrame | None:
     return df
 
 
-def _composite_signal_series(df: pd.DataFrame, vix_df: pd.DataFrame | None,
-                               symbol: str) -> pd.Series:
-    """Vectorized composite signal for a single symbol."""
+def _composite_raw_scores(df: pd.DataFrame, vix_df: pd.DataFrame | None,
+                           symbol: str) -> pd.Series:
+    """Vectorized composite RAW score series for a single symbol (not thresholded)."""
     from strategies.composite import composite_score
     from config import STRATEGY_WEIGHTS, COMPOSITE_BUY_THRESHOLD
     result = composite_score(
@@ -97,7 +97,46 @@ def _composite_signal_series(df: pd.DataFrame, vix_df: pd.DataFrame | None,
         sell_threshold=3.0,
         weights=STRATEGY_WEIGHTS,
     )
-    return result["signal_series"].reindex(df.index, fill_value=0)
+    return result["indicators"]["Composite_Score"].reindex(df.index, fill_value=0.0)
+
+
+def _build_binary_pos(score_series: pd.Series,
+                       buy_threshold: float = 6.0,
+                       sell_threshold: float = -3.0) -> pd.Series:
+    """Original binary in/out position."""
+    pos  = pd.Series(0.0, index=score_series.index)
+    curr = 0.0
+    for dt, score in score_series.items():
+        if score >= buy_threshold:
+            curr = 1.0
+        elif score <= sell_threshold:
+            curr = 0.0
+        pos[dt] = curr
+    return pos
+
+
+def _build_graduated_pos(score_series: pd.Series,
+                          sell_threshold: float = -5.0) -> pd.Series:
+    """
+    Direction 1+2: Graduated position sizing with asymmetric exit.
+    score ≥ 7.5→100%  ≥6.0→80%  ≥4.5→50%  ≥2.5→25%  ≤sell_threshold→0%  else hold.
+    """
+    pos  = pd.Series(0.0, index=score_series.index)
+    curr = 0.0
+    for dt, score in score_series.items():
+        if score >= 7.5:
+            curr = 1.00
+        elif score >= 6.0:
+            curr = 0.80
+        elif score >= 4.5:
+            curr = 0.50
+        elif score >= 2.5:
+            curr = 0.25
+        elif score <= sell_threshold:
+            curr = 0.00
+        # else: hold current in neutral zone
+        pos[dt] = curr
+    return pos
 
 
 def _crash_shield_mult(spy_df: pd.DataFrame,
@@ -304,76 +343,82 @@ def main():
         df_c  = df.reindex(common)
         ret   = df_c["Close"].pct_change()
 
-        # Composite signal
+        # Composite raw scores (used for both binary v1 and graduated v2)
         try:
-            sig = _composite_signal_series(df_c, vix_df, symbol=sym)
+            raw_scores = _composite_raw_scores(df_c, vix_df, symbol=sym)
         except Exception as e:
             print(f"   ⚠️  Signal error: {e} — skip")
             continue
 
-        # Build position series: hold while signal >= 0, exit on -1
-        in_pos = pd.Series(False, index=common)
-        pos = False
-        for dt in common:
-            s = int(sig.get(dt, 0))
-            if s == 1:   pos = True
-            elif s == -1: pos = False
-            in_pos[dt] = pos
-        pos_composite = in_pos.astype(float)
+        # v1: old binary (enter ≥6, exit ≤-3)
+        pos_v1 = _build_binary_pos(raw_scores, buy_threshold=6.0, sell_threshold=-3.0)
+        # v2: graduated + asymmetric exit (Direction 1+2, exit ≤-5)
+        pos_v2 = _build_graduated_pos(raw_scores, sell_threshold=-5.0)
 
-        # Apply combined market-level multiplier
-        mkt_mult = combined_mkt.reindex(common, fill_value=1.0)
-        pos_full  = (pos_composite * mkt_mult).clip(0, 1)
+        # Apply combined market-level multiplier (CS × ML × DM)
+        mkt_mult  = combined_mkt.reindex(common, fill_value=1.0)
+        pos_v1_full = (pos_v1 * mkt_mult).clip(0, 1)
+        pos_v2_full = (pos_v2 * mkt_mult).clip(0, 1)
 
         # Simulate
         bah   = (df_c["Close"] / df_c["Close"].iloc[0])
         eq_bh = pd.Series(bah.values, index=common)
-        eq_s  = _sim(ret, pos_composite, cost_bps=args.cost)
-        eq_f  = _sim(ret, pos_full,      cost_bps=args.cost)
+        eq_v1 = _sim(ret, pos_v1_full, cost_bps=args.cost)   # old full 3-layer
+        eq_v2 = _sim(ret, pos_v2_full, cost_bps=args.cost)   # new full 3-layer v2
 
-        days_in   = int(pos_composite.sum())
-        pct_in    = days_in / max(len(common), 1) * 100
-        print(f"   Days: {len(common):,}  |  Invested: {days_in:,} ({pct_in:.0f}%)")
+        days_v1 = int((pos_v1 > 0).sum())
+        days_v2 = int((pos_v2 > 0).sum())
+        pct_v1  = days_v1 / max(len(common), 1) * 100
+        pct_v2  = days_v2 / max(len(common), 1) * 100
+        avg_v2  = float(pos_v2[pos_v2 > 0].mean()) * 100 if (pos_v2 > 0).any() else 0.0
+        print(f"   Days: {len(common):,}  |  Old invested: {days_v1:,} ({pct_v1:.0f}%)  "
+              f"New invested: {days_v2:,} ({pct_v2:.0f}%, avg {avg_v2:.0f}%)")
 
         results[sym] = {
-            "label":   label,
-            "eq_bh":   eq_bh,
-            "eq_strat": eq_s,
-            "eq_full":  eq_f,
+            "label":       label,
+            "eq_bh":       eq_bh,
+            "eq_full":     eq_v1,    # backward compat: old 3-layer
+            "eq_v2":       eq_v2,    # new 3-layer v2
             "stats_bh":    _stats(eq_bh),
-            "stats_strat": _stats(eq_s),
-            "stats_full":  _stats(eq_f),
-            "n_days":  len(common),
-            "pct_in":  pct_in,
+            "stats_full":  _stats(eq_v1),
+            "stats_v2":    _stats(eq_v2),
+            "n_days":      len(common),
+            "pct_in":      pct_v1,
+            "pct_in_v2":   pct_v2,
         }
 
     if not results:
         print("\n❌ No results — check data availability"); return
 
     # ── 4. Print performance table ─────────────────────────────────────────
-    print(f"\n\n{'═'*92}")
-    print(f"  Performance Summary — B&H vs Full 3-Layer Strategy  (from {start_date})")
-    print(f"{'═'*92}")
-    print(f"  {'Symbol':<8} {'Name':<12}  "
-          f"{'BH Total':>9} {'BH CAGR':>8} {'BH MaxDD':>9} │ "
-          f"{'S Total':>9} {'S CAGR':>8} {'S MaxDD':>9} {'S Sharpe':>9} {'S Calmar':>8}")
-    print(f"  {'─'*8} {'─'*12}  {'─'*9} {'─'*8} {'─'*9} ┼ "
-          f"{'─'*9} {'─'*8} {'─'*9} {'─'*9} {'─'*8}")
+    print(f"\n\n{'═'*110}")
+    print(f"  Performance Summary — B&H  vs  Old 3-Layer (binary, sell≤-3)  vs  New 3-Layer v2 (graduated, sell≤-5)")
+    print(f"  from {start_date}  |  cost={args.cost}bps  |  ML: {'yes' if not args.skip_ml else 'skip'}")
+    print(f"{'═'*110}")
+    print(f"  {'Symbol':<8} {'Name':<10}  "
+          f"{'B&H CAGR':>9} {'B&H DD':>8} │ "
+          f"{'Old CAGR':>9} {'Old DD':>8} {'OldSharpe':>9} │ "
+          f"{'New CAGR':>9} {'New DD':>8} {'NewSharpe':>9}  {'Δ CAGR':>7} {'Δ DD':>7}")
+    print(f"  {'─'*8} {'─'*10}  {'─'*9} {'─'*8} ┼ "
+          f"{'─'*9} {'─'*8} {'─'*9} ┼ {'─'*9} {'─'*8} {'─'*9}  {'─'*7} {'─'*7}")
 
     for sym, r in results.items():
         bh = r["stats_bh"]
-        sf = r["stats_full"]
-        # Max DD improvement indicator
-        dd_imp = sf["max_dd"] - bh["max_dd"]
-        dd_mark = "✅" if dd_imp > 0.05 else ("⚡" if dd_imp > 0 else "")
+        sv = r["stats_full"]   # old
+        s2 = r["stats_v2"]    # new
+        d_cagr = (s2["cagr"] - sv["cagr"]) * 100
+        d_dd   = (s2["max_dd"] - sv["max_dd"]) * 100
+        cagr_mark = "↑" if d_cagr > 0.3 else ("↓" if d_cagr < -0.3 else "≈")
+        dd_mark   = "✅" if d_dd > 2 else ("⚡" if d_dd > 0 else ("⚠" if d_dd < -2 else ""))
         print(
-            f"  {sym:<8} {r['label'][:12]:<12}  "
-            f"{bh['total']*100:>+8.0f}% {bh['cagr']*100:>7.1f}% {bh['max_dd']*100:>8.1f}% │ "
-            f"{sf['total']*100:>+8.0f}% {sf['cagr']*100:>7.1f}% {sf['max_dd']*100:>8.1f}% "
-            f"{sf['sharpe']:>9.2f} {sf['calmar']:>8.2f}  {dd_mark}"
+            f"  {sym:<8} {r['label'][:10]:<10}  "
+            f"{bh['cagr']*100:>8.1f}% {bh['max_dd']*100:>7.1f}% │ "
+            f"{sv['cagr']*100:>8.1f}% {sv['max_dd']*100:>7.1f}% {sv['sharpe']:>9.2f} │ "
+            f"{s2['cagr']*100:>8.1f}% {s2['max_dd']*100:>7.1f}% {s2['sharpe']:>9.2f}  "
+            f"{d_cagr:>+6.1f}% {d_dd:>+6.1f}%  {cagr_mark}{dd_mark}"
         )
 
-    print(f"\n  ✅ = MaxDD reduced by >5%  ⚡ = MaxDD slightly improved")
+    print(f"\n  ↑ CAGR improved  ✅ MaxDD reduced >2pp  ⚡ MaxDD slightly better  ⚠ MaxDD worse")
     print(f"  Cost: {args.cost}bps/trade | ML: {'yes' if not args.skip_ml else 'skip'}")
 
     # ── 5. Crash period table ──────────────────────────────────────────────
@@ -382,42 +427,60 @@ def main():
     print(f"{'═'*92}")
     header = f"  {'Symbol':<8}"
     for name, *_ in CRASH_PERIODS:
-        header += f"  {name[:10]:>12}BH  {name[:10]:>12}3L"
-    print(header[:160])
-    print("  " + "─" * 88)
+        short = name[:8]
+        header += f"  {short:>7} {'Old':>6} {'New':>6}"
+    print(header)
+    print("  " + "─" * 100)
 
     for sym, r in results.items():
         row = f"  {sym:<8}"
         for name, cs, ce in CRASH_PERIODS:
-            bh_r = _crash_ret(r["eq_bh"],    cs, ce)
-            fl_r = _crash_ret(r["eq_full"],   cs, ce)
+            bh_r  = _crash_ret(r["eq_bh"],   cs, ce)
+            old_r = _crash_ret(r["eq_full"],  cs, ce)
+            new_r = _crash_ret(r["eq_v2"],    cs, ce)
             if bh_r is None:
-                row += f"  {'N/A':>14}  {'N/A':>14}"
+                row += f"  {'N/A':>7} {'N/A':>6} {'N/A':>6}"
             else:
-                bh_str = f"{bh_r*100:+.0f}%"
-                fl_str = f"{fl_r*100:+.0f}%" if fl_r is not None else "N/A"
-                protect = "🛡" if fl_r is not None and fl_r > bh_r + 0.05 else " "
-                row += f"  {bh_str:>14}  {fl_str:>13}{protect}"
+                bh_s  = f"{bh_r*100:+.0f}%"
+                old_s = f"{old_r*100:+.0f}%" if old_r is not None else "N/A"
+                new_s = f"{new_r*100:+.0f}%" if new_r is not None else "N/A"
+                row += f"  {bh_s:>7} {old_s:>6} {new_s:>6}"
         print(row)
 
-    print(f"\n  🛡 = Strategy reduced loss by >5% vs B&H during crash period")
+    # Column header guide
+    print(f"\n  Per crash period columns: BH=Buy&Hold  Old=Old3L  New=New3Lv2")
+    print(f"  Note: positive/less-negative = strategy held less SPY during crash")
 
     # ── 6. Compact crash summary ───────────────────────────────────────────
     print(f"\n\n{'═'*92}")
     print(f"  2008 Financial Crisis Highlight (worst drawdown in 20yr)")
     print(f"{'═'*92}")
     cs_2008, ce_2008 = "2007-10-09", "2009-03-09"
-    print(f"  {'Symbol':<8}  {'B&H':>8}  {'3-Layer':>8}  {'Saved':>8}  Comment")
-    print("  " + "─" * 65)
+    print(f"  {'Symbol':<8}  {'B&H':>8}  {'Old 3L':>8}  {'New 3L':>8}  {'Old Δ':>8}  {'New Δ':>8}  Note")
+    print("  " + "─" * 80)
     for sym, r in results.items():
-        bh_r = _crash_ret(r["eq_bh"],  cs_2008, ce_2008)
-        fl_r = _crash_ret(r["eq_full"], cs_2008, ce_2008)
-        if bh_r is None or fl_r is None:
-            print(f"  {sym:<8}  {'N/A':>8}  {'N/A':>8}  {'—':>8}  (no 2008 data)")
+        bh_r  = _crash_ret(r["eq_bh"],   cs_2008, ce_2008)
+        old_r = _crash_ret(r["eq_full"],  cs_2008, ce_2008)
+        new_r = _crash_ret(r["eq_v2"],    cs_2008, ce_2008)
+        if bh_r is None:
+            print(f"  {sym:<8}  {'N/A':>8}  {'N/A':>8}  {'N/A':>8}  (no 2008 data)")
             continue
-        saved = fl_r - bh_r
-        emoji = "✅✅" if saved > 0.20 else ("✅" if saved > 0.10 else "⚡")
-        print(f"  {sym:<8}  {bh_r*100:>+7.1f}%  {fl_r*100:>+7.1f}%  {saved*100:>+7.1f}%  {emoji}")
+        old_d = (old_r - bh_r) if old_r is not None else None
+        new_d = (new_r - bh_r) if new_r is not None else None
+        old_s = f"{old_r*100:>+7.1f}%" if old_r is not None else "    N/A"
+        new_s = f"{new_r*100:>+7.1f}%" if new_r is not None else "    N/A"
+        od_s  = f"{old_d*100:>+7.1f}%" if old_d is not None else "     —"
+        nd_s  = f"{new_d*100:>+7.1f}%" if new_d is not None else "     —"
+        # Grade the new version
+        if new_d is not None and new_d > 0.20:
+            note = "✅✅ excellent"
+        elif new_d is not None and new_d > 0.10:
+            note = "✅ good protection"
+        elif new_d is not None and new_d > 0.02:
+            note = "⚡ modest protection"
+        else:
+            note = ""
+        print(f"  {sym:<8}  {bh_r*100:>+7.1f}%  {old_s}  {new_s}  {od_s}  {nd_s}  {note}")
 
     # ── 7. Chart ──────────────────────────────────────────────────────────
     if not args.no_plot:
@@ -449,12 +512,16 @@ def _make_chart(results: dict, start_date: str):
                 ), row=row, col=col)
                 fig1.add_trace(go.Scatter(
                     x=r["eq_full"].index, y=r["eq_full"].values,
-                    name=f"{sym} 3-Layer", line=dict(color="crimson", width=2.0),
+                    name=f"{sym} Old 3L", line=dict(color="steelblue", width=1.5),
+                ), row=row, col=col)
+                fig1.add_trace(go.Scatter(
+                    x=r["eq_v2"].index, y=r["eq_v2"].values,
+                    name=f"{sym} New 3L v2", line=dict(color="crimson", width=2.0),
                 ), row=row, col=col)
 
             fig1.update_yaxes(type="log")
             fig1.update_layout(
-                title=f"指数ETF — B&H vs 3-Layer策略 (from {start_date})",
+                title=f"指数ETF — B&H vs Old 3-Layer vs New 3-Layer v2 (from {start_date})",
                 height=700, showlegend=True,
                 hovermode="x unified",
             )
@@ -484,13 +551,18 @@ def _make_chart(results: dict, start_date: str):
                 ), row=row, col=col)
                 fig2.add_trace(go.Scatter(
                     x=r["eq_full"].index, y=r["eq_full"].values,
-                    name=f"{sym} 3L", line=dict(color="steelblue", width=1.8),
+                    name=f"{sym} Old 3L", line=dict(color="steelblue", width=1.5),
+                    legendgroup=sym, showlegend=(i == 0),
+                ), row=row, col=col)
+                fig2.add_trace(go.Scatter(
+                    x=r["eq_v2"].index, y=r["eq_v2"].values,
+                    name=f"{sym} New 3L v2", line=dict(color="crimson", width=1.8),
                     legendgroup=sym, showlegend=(i == 0),
                 ), row=row, col=col)
 
             fig2.update_yaxes(type="log")
             fig2.update_layout(
-                title=f"个股 — B&H vs 3-Layer策略 (from {start_date})",
+                title=f"个股 — B&H vs Old 3-Layer vs New 3-Layer v2 (from {start_date})",
                 height=max(500, rows_n * 280),
                 hovermode="x unified",
             )
@@ -514,24 +586,33 @@ def _make_chart(results: dict, start_date: str):
                     continue
                 r   = results[sym]
                 try:
-                    seg_bh = r["eq_bh"].loc[cs:ce]
-                    seg_fl = r["eq_full"].loc[cs:ce]
+                    seg_bh  = r["eq_bh"].loc[cs:ce]
+                    seg_old = r["eq_full"].loc[cs:ce]
+                    seg_new = r["eq_v2"].loc[cs:ce]
                     if len(seg_bh) < 5:
                         continue
                     # Normalize to 100 at start of period
-                    norm_bh = seg_bh / seg_bh.iloc[0] * 100
-                    norm_fl = seg_fl / seg_fl.iloc[0] * 100
+                    norm_bh  = seg_bh  / seg_bh.iloc[0]  * 100
+                    norm_old = seg_old / seg_old.iloc[0] * 100
+                    norm_new = seg_new / seg_new.iloc[0] * 100
                     c = row_colors[plotted % len(row_colors)]
                     fig3.add_trace(go.Scatter(
                         x=norm_bh.index, y=norm_bh.values,
                         name=f"{sym} B&H",
-                        line=dict(color=c, width=1.2, dash="dot"),
+                        line=dict(color=c, width=1.0, dash="dot"),
                         legendgroup=f"{sym}",
                         showlegend=(ri == 1),
                     ), row=ri, col=1)
                     fig3.add_trace(go.Scatter(
-                        x=norm_fl.index, y=norm_fl.values,
-                        name=f"{sym} 3L",
+                        x=norm_old.index, y=norm_old.values,
+                        name=f"{sym} Old 3L",
+                        line=dict(color=c, width=1.5, dash="dash"),
+                        legendgroup=f"{sym}",
+                        showlegend=(ri == 1),
+                    ), row=ri, col=1)
+                    fig3.add_trace(go.Scatter(
+                        x=norm_new.index, y=norm_new.values,
+                        name=f"{sym} New 3L",
                         line=dict(color=c, width=2.0),
                         legendgroup=f"{sym}",
                         showlegend=(ri == 1),
@@ -541,8 +622,8 @@ def _make_chart(results: dict, start_date: str):
                     pass
 
         fig3.update_layout(
-            title="各次危机中 B&H vs 3-Layer保护效果对比 (基期=100)",
-            height=1000, hovermode="x unified",
+            title="各次危机中 B&H vs Old 3-Layer vs New 3-Layer v2 保护效果对比 (基期=100)",
+            height=1100, hovermode="x unified",
         )
         path3 = ROOT / "scripts" / "backtest_crashes.html"
         fig3.write_html(str(path3))
