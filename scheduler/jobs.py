@@ -40,6 +40,10 @@ from config import (
     SYMBOL_QUALITY_TIER,
     TIER_MAX_POSITION,
     SYMBOL_MIN_SCORE,
+    # SGOV cash-substitute
+    SGOV_SYMBOL,
+    SGOV_TARGET_DEPLOYED,
+    SGOV_MAX_ALLOC,
 )
 
 logger = logging.getLogger(__name__)
@@ -381,6 +385,42 @@ def run_daily_pipeline(market: Market = "us") -> dict:
                 }
             summary["portfolio_weights"]  = portfolio_weights
             summary["position_caps_hit"]  = capped
+
+    # ── 2e. SGOV cash-substitute — park idle capital in T-bills ──────────
+    #
+    # After all equity positions are finalised, if the total deployed weight
+    # is below SGOV_TARGET_DEPLOYED, fill the gap with SGOV so idle cash
+    # earns T-bill yield (~4% annualised) instead of sitting at 0%.
+    #
+    # SGOV bypasses the normal composite-score pipeline intentionally —
+    # T-bill ETFs score near-zero on trend/momentum strategies and would
+    # never reach the BUY threshold on their own.
+    #
+    # Also acts as the natural "safe harbour" when CrashShield fires:
+    #   SHIELD active → equity ≈ 0 → SGOV ≈ SGOV_TARGET_DEPLOYED (35%)
+    if market == "us":
+        equity_total = sum(
+            w for sym, w in portfolio_weights.items() if sym != SGOV_SYMBOL
+        )
+        sgov_alloc = round(
+            max(0.0, min(SGOV_MAX_ALLOC, SGOV_TARGET_DEPLOYED - equity_total)), 4
+        )
+        if sgov_alloc >= 0.01:   # only if meaningful (≥1%)
+            portfolio_weights[SGOV_SYMBOL] = sgov_alloc
+            gated_signals[SGOV_SYMBOL]     = 1          # synthetic BUY for executor
+            composite_scores[SGOV_SYMBOL]  = 5.0        # neutral-positive placeholder
+            summary["sgov_alloc"] = sgov_alloc
+            logger.info(
+                "[us] SGOV cash-sub: equity_total=%.1f%% gap=%.1f%% → SGOV=%.1f%%",
+                equity_total * 100,
+                (SGOV_TARGET_DEPLOYED - equity_total) * 100,
+                sgov_alloc * 100,
+            )
+        else:
+            logger.info(
+                "[us] SGOV cash-sub: equity_total=%.1f%% ≥ target %.0f%% — no SGOV needed",
+                equity_total * 100, SGOV_TARGET_DEPLOYED * 100,
+            )
 
     # ── 3. Paper / virtual trade ──────────────────────────────────────
     trade_results: list = []

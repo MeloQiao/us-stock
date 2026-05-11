@@ -32,7 +32,8 @@ MARKET_WATCHLISTS: dict[str, dict[str, list[str]]] = {
             "ICLN",  # 全球清洁能源ETF   — 新能源主题
             "ARKK",  # ARK Innovation    — 颠覆性创新高beta
             "GLD",   # 黄金              — 宏观避险
-            "TLT",   # 20年期美债        — 宏观利率方向
+            "TLT",   # 20年期美债        — 宏观利率方向（战术配置）
+            "SGOV",  # 美国T-Bill ETF    — 现金替代，空仓时停泊资金（年化~4%）
             "IBIT",  # 贝莱德比特币ETF   — BTC现货合规代理
             # ── 杠杆/反向 (仅趋势策略) ────────────────────────────────────
             "TQQQ",  # 3x 做多纳指       — 趋势强时主攻
@@ -147,7 +148,8 @@ SYMBOL_NAMES: dict[str, str] = {
     "ICLN": "清洁能源",
     "ARKK": "ARK创新",
     "GLD": "黄金",
-    "TLT": "20年美债",
+    "TLT":  "20年美债",
+    "SGOV": "T-Bill现金替代",
     "IBIT": "比特币ETF",
     "TQQQ": "纳指3x多",
     "SQQQ": "纳指3x空",
@@ -302,14 +304,17 @@ SYMBOL_QUALITY_TIER: dict[str, str] = {
     "ICLN": "C", "ARKK": "C",
     # Tier S — speculative, max 8%, needs very high composite score
     "MSTR": "S", "COIN": "S", "SMCI": "S", "RKLB": "S", "UVXY": "S",
+    # Cash substitute — bypasses normal signal pipeline, injected by jobs.py
+    "SGOV": "CASH",
 }
 
 # Maximum portfolio fraction by quality tier
 TIER_MAX_POSITION: dict[str, float] = {
-    "A": 0.25,   # up to 25% of portfolio
-    "B": 0.20,   # up to 20%
-    "C": 0.10,   # capped at 10%
-    "S": 0.08,   # capped at  8%
+    "A":    0.25,   # up to 25% of portfolio
+    "B":    0.20,   # up to 20%
+    "C":    0.10,   # capped at 10%
+    "S":    0.08,   # capped at  8%
+    "CASH": 0.40,   # SGOV: up to 40% (cash substitute, not a risk position)
 }
 
 # ── Per-symbol minimum composite score to enter ───────────────────────────
@@ -391,3 +396,19 @@ TIMEZONE         = MARKET_SCHEDULE["us"]["timezone"]
 
 # ── Paper trade ───────────────────────────────────────────────────────────
 PAPER_TRADE_POSITION_SIZE = 0.1   # 10% of portfolio per signal
+
+# ── SGOV cash-substitute settings ────────────────────────────────────────
+# When equity positions are under-invested, idle capital is parked in SGOV
+# (iShares 0-3 Month T-Bill ETF) to earn T-bill yield (~4% annualised).
+#
+# Logic (applied after all equity positions are finalised):
+#   sgov_alloc = clamp(SGOV_TARGET_DEPLOYED - equity_total, 0, SGOV_MAX_ALLOC)
+#
+# Examples (SGOV_TARGET_DEPLOYED=0.35, SGOV_MAX_ALLOC=0.40):
+#   equity_total=0.05  → SGOV=0.30   (light signal day, mostly T-bills)
+#   equity_total=0.20  → SGOV=0.15   (moderate positions)
+#   equity_total=0.35  → SGOV=0.00   (fully invested, no cash sub needed)
+#   SHIELD active (equity≈0) → SGOV=0.35  (crash mode: park everything in T-bills)
+SGOV_SYMBOL:           str   = "SGOV"
+SGOV_TARGET_DEPLOYED:  float = 0.35   # aim to have at least 35% deployed at all times
+SGOV_MAX_ALLOC:        float = 0.40   # never exceed 40% in SGOV alone
