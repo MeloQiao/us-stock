@@ -51,7 +51,7 @@
       "symbol": "SOXL",
       "shares": 20,
       "current_price": 181.86,
-      "avg_cost": null,
+      "avg_cost": 181.45,
       "in_strategy": true,
       "note": "20 shares — leveraged ETF, TQQQ-equivalent gate applies"
     }
