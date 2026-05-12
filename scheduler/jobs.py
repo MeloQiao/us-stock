@@ -440,20 +440,38 @@ def run_daily_pipeline(market: Market = "us") -> dict:
             "change_pct": round((close - prev) / prev * 100, 2) if prev else 0.0,
         }
 
-    if market == "us" and ALPACA_API_KEY:
+    if market == "us":
         try:
-            from paper_trade.alpaca_trader import execute_signals, get_portfolio_summary
-            trade_results = execute_signals(
-                gated_signals,
-                scores=composite_scores,
-                weights=portfolio_weights if portfolio_weights else None,
+            from paper_trade.rh_tracker import (
+                compare_signals, get_portfolio_summary, update_prices,
             )
-            summary["trades"] = trade_results
+            # Refresh prices in the local positions file
+            update_prices(prices)
+            # Compare strategy signals against actual Robinhood positions
+            trade_results = compare_signals(
+                signals=gated_signals,
+                composite_scores=composite_scores,
+                prices=prices,
+                portfolio_weights=portfolio_weights if portfolio_weights else None,
+            )
             portfolio_summary = get_portfolio_summary()
-            logger.info("[us] Paper trades: %d orders", len(trade_results))
+            summary["trades"] = trade_results
+            exits   = [t for t in trade_results if t["action"] == "EXIT"]
+            entries = [t for t in trade_results if t["action"] == "ENTER"]
+            trims   = [t for t in trade_results if t["action"] == "TRIM"]
+            logger.info(
+                "[us] RH signal check: %d EXIT  %d ENTER  %d TRIM",
+                len(exits), len(entries), len(trims),
+            )
+            for t in exits:
+                logger.warning("[us] %s %s — %s", t["urgency"], t["symbol"], t["reason"])
+            for t in entries:
+                logger.info("[us] %s %s — %s notional=$%s",
+                            t["urgency"], t["symbol"], t["reason"],
+                            t.get("notional", "?"))
         except Exception as e:
-            logger.error("[us] Paper trade failed: %s", e)
-            summary["errors"].append(f"Paper trade failed: {e}")
+            logger.error("[us] RH tracker failed: %s", e)
+            summary["errors"].append(f"RH tracker failed: {e}")
 
     elif market in ("hk", "cn") and HF_TOKEN and HF_DATASET_REPO:
         try:
