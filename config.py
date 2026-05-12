@@ -92,18 +92,23 @@ MARKET_WATCHLISTS: dict[str, dict[str, list[str]]] = {
             "07500",  # 三星2x做多恒生指数             — TQQQ-HSI (LEVERAGED)
         ],
         "stocks": [
-            "00700",  # 腾讯    — AAPL (stable trend, huge ecosystem)
-            "09988",  # 阿里巴巴 — TSLA (high volatility, recovery play)
-            "03690",  # 美团    — META (strong domestic trend)
-            "09618",  # 京东    — mid-beta e-commerce
-            "09999",  # 网易    — stable gaming + education
-            "01024",  # 快手    — high-beta short video (social media)
-            "00981",  # 中芯国际H — NVDA proxy (China's leading foundry)
-            "01211",  # 比亚迪H  — TSLA proxy (world's largest EV maker)
-            "09866",  # 蔚来    — high-beta EV (premium segment)
-            "02015",  # 理想汽车 — strong trend EV
-            "02382",  # 舜宇光学 — AI optics hardware
-            "09626",  # 哔哩哔哩 — high-beta content platform
+            # ── 科技互联网 ─────────────────────────────────────────────────
+            "00700",  # 腾讯    — 生态系统最稳定，趋势策略效果好
+            "09988",  # 阿里巴巴 — 回调后修复，动量特征改善
+            "03690",  # 美团    — 本地生活龙头，趋势清晰
+            "09618",  # 京东    — 电商+物流，中等 beta
+            "09999",  # 网易    — 稳定游戏+教育，低波动
+            "09961",  # 携程    — 亚太出行龙头，复苏趋势动量好
+            # ── 半导体/硬件 ────────────────────────────────────────────────
+            "00981",  # 中芯国际H — 中国晶圆代工龙头，AI主线
+            "02382",  # 舜宇光学 — AI光学硬件，趋势跟踪效果好
+            # ── 新能源/汽车 ────────────────────────────────────────────────
+            "01211",  # 比亚迪H  — 全球EV销量第一，趋势策略适合
+            # ── 金融/保险 ──────────────────────────────────────────────────
+            "00388",  # 港交所   — 垄断金融基础设施，趋势稳定，流动性极好
+            "01299",  # 友邦保险 — 亚太区保险龙头，中长期趋势清晰
+            # ── 内容平台 ───────────────────────────────────────────────────
+            "09626",  # 哔哩哔哩 — 高 beta 内容平台
         ],
     },
     "cn": {
@@ -200,12 +205,12 @@ SYMBOL_NAMES: dict[str, str] = {
     "03690": "美团",
     "09618": "京东",
     "09999": "网易",
-    "01024": "快手",
+    "09961": "携程",
     "00981": "中芯国际H",
-    "01211": "比亚迪H",
-    "09866": "蔚来",
-    "02015": "理想汽车",
     "02382": "舜宇光学",
+    "01211": "比亚迪H",
+    "00388": "港交所",
+    "01299": "友邦保险",
     "09626": "哔哩哔哩",
     # CN ETFs
     "510300": "沪深300ETF",
@@ -299,6 +304,10 @@ SYMBOL_QUALITY_TIER: dict[str, str] = {
     "PLTR": "B", "CRWD":  "B", "GLD":  "B",
     "TLT":  "B", "IWM":   "B", "DIA":  "B",
     "IBIT": "B", "CEG":   "B", "VST":  "B",
+    # HK new additions
+    "00388": "B",  # 港交所 — 稳定金融基础设施
+    "01299": "B",  # 友邦保险 — 清晰趋势
+    "09961": "B",  # 携程 — 动量特征好
     # Tier C — strategy consistently underperforms, signal unreliable
     "XOM":  "C", "CVX":  "C", "XLE":  "C",
     "ICLN": "C", "ARKK": "C",
