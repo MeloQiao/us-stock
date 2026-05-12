@@ -491,30 +491,23 @@ def run_daily_pipeline(market: Market = "us") -> dict:
             logger.error("[cn] CN tracker failed: %s", e)
             summary["errors"].append(f"CN tracker failed: {e}")
 
-    elif market == "hk" and HF_TOKEN and HF_DATASET_REPO:
+    elif market == "hk":
         try:
-            from paper_trade.virtual_portfolio import VirtualPortfolio
-            vp = VirtualPortfolio(
-                market=market,
-                total_capital=VIRTUAL_PORTFOLIO_CAPITAL[market],
-                currency=VIRTUAL_PORTFOLIO_CURRENCY[market],
-                hf_repo=HF_DATASET_REPO,
-                hf_token=HF_TOKEN,
-            )
-            trade_results = vp.execute_signals(
-                gated_signals,
+            from paper_trade.hk_tracker import execute_signals as hk_execute, get_portfolio_summary as hk_summary
+            trade_results = hk_execute(
+                signals=gated_signals,
                 scores=composite_scores,
                 prices=prices,
                 weights=portfolio_weights if portfolio_weights else None,
                 regime=regime_info.get("sub_state", "bull_caution"),
                 max_possible=9,
             )
-            portfolio_summary = vp.get_summary(prices=prices)
+            portfolio_summary = hk_summary(prices=prices)
             summary["trades"] = trade_results
             logger.info("[hk] Virtual trades: %d orders", len(trade_results))
         except Exception as e:
-            logger.error("[hk] Virtual portfolio failed: %s", e)
-            summary["errors"].append(f"Virtual portfolio failed: {e}")
+            logger.error("[hk] HK tracker failed: %s", e)
+            summary["errors"].append(f"HK tracker failed: {e}")
 
     # ── 3b. Options suggestions (US only, advisory) ───────────────────
     options_report: dict = {}

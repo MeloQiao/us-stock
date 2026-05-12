@@ -1,0 +1,9 @@
+{
+  "_note": "HK virtual portfolio. Auto-managed by hk_tracker.py via daily signals.",
+  "updated": "2026-05-12",
+  "capital": 1000000,
+  "currency": "HKD",
+  "cash": 1000000,
+  "positions": [],
+  "trade_history": []
+}
