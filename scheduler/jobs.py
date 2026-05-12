@@ -480,6 +480,35 @@ def run_daily_pipeline(market: Market = "us") -> dict:
             logger.error("[%s] Virtual portfolio failed: %s", market, e)
             summary["errors"].append(f"Virtual portfolio failed: {e}")
 
+    # ── 3b. Options suggestions (US only, advisory) ───────────────────
+    options_report: dict = {}
+    if market == "us":
+        try:
+            from paper_trade.options_helper import generate_options_suggestions
+            # Build trailing price history from loaded data (last 21 closes)
+            price_hist: dict[str, list[float]] = {}
+            for sym, df in data.items():
+                if "Close" in df.columns and len(df) >= 5:
+                    price_hist[sym] = df["Close"].dropna().tail(21).tolist()
+            alpaca_positions: list[dict] = []
+            if portfolio_summary:
+                alpaca_positions = portfolio_summary.get("positions", [])
+            options_report = generate_options_suggestions(
+                market=market,
+                positions=alpaca_positions,
+                prices=prices,
+                composite_scores=composite_scores,
+                signals=gated_signals,
+                watch_symbols=symbols,
+                price_history=price_hist,
+            )
+            summary["options_suggestions"] = {
+                "n_calls": len(options_report.get("covered_calls", [])),
+                "n_puts":  len(options_report.get("cash_puts", [])),
+            }
+        except Exception as e:
+            logger.warning("[us] Options suggestions failed: %s", e)
+
     # ── 4. Feishu alert ───────────────────────────────────────────────
     if FEISHU_WEBHOOK_URL and all_results:
         try:
