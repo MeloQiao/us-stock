@@ -2,7 +2,7 @@
   "_note": "Robinhood actual positions. Update manually or via rh_tracker.py update command.",
   "updated": "2026-05-12",
   "account": {
-    "cash": 7125.02,
+    "cash": 4205.02,
     "cash_yield_pct": 3.35,
     "broker": "Robinhood"
   },
@@ -17,11 +17,11 @@
     },
     {
       "symbol": "AAPL",
-      "shares": 65,
+      "shares": 75,
       "current_price": 292.91,
-      "avg_cost": 269.69,
+      "avg_cost": 272.66,
       "in_strategy": true,
-      "note": "65 shares — need 35 more for Covered Call"
+      "note": "75 shares — need 25 more for Covered Call"
     },
     {
       "symbol": "DIA",
