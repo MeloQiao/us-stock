@@ -473,7 +473,25 @@ def run_daily_pipeline(market: Market = "us") -> dict:
             logger.error("[us] RH tracker failed: %s", e)
             summary["errors"].append(f"RH tracker failed: {e}")
 
-    elif market in ("hk", "cn") and HF_TOKEN and HF_DATASET_REPO:
+    elif market == "cn":
+        try:
+            from paper_trade.cn_tracker import execute_signals as cn_execute, get_portfolio_summary as cn_summary
+            trade_results = cn_execute(
+                signals=gated_signals,
+                scores=composite_scores,
+                prices=prices,
+                weights=portfolio_weights if portfolio_weights else None,
+                regime=regime_info.get("sub_state", "bull_caution"),
+                max_possible=9,
+            )
+            portfolio_summary = cn_summary(prices=prices)
+            summary["trades"] = trade_results
+            logger.info("[cn] Virtual trades: %d orders", len(trade_results))
+        except Exception as e:
+            logger.error("[cn] CN tracker failed: %s", e)
+            summary["errors"].append(f"CN tracker failed: {e}")
+
+    elif market == "hk" and HF_TOKEN and HF_DATASET_REPO:
         try:
             from paper_trade.virtual_portfolio import VirtualPortfolio
             vp = VirtualPortfolio(
@@ -493,9 +511,9 @@ def run_daily_pipeline(market: Market = "us") -> dict:
             )
             portfolio_summary = vp.get_summary(prices=prices)
             summary["trades"] = trade_results
-            logger.info("[%s] Virtual trades: %d orders", market, len(trade_results))
+            logger.info("[hk] Virtual trades: %d orders", len(trade_results))
         except Exception as e:
-            logger.error("[%s] Virtual portfolio failed: %s", market, e)
+            logger.error("[hk] Virtual portfolio failed: %s", e)
             summary["errors"].append(f"Virtual portfolio failed: {e}")
 
     # ── 3b. Options suggestions (US only, advisory) ───────────────────

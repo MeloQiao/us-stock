@@ -1,0 +1,9 @@
+{
+  "_note": "A-stock virtual portfolio. Auto-managed by cn_tracker.py via daily signals.",
+  "updated": "2026-05-12",
+  "capital": 1000000,
+  "currency": "CNY",
+  "cash": 1000000,
+  "positions": [],
+  "trade_history": []
+}
