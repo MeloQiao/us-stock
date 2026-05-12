@@ -493,18 +493,17 @@ def run_daily_pipeline(market: Market = "us") -> dict:
 
     elif market == "hk":
         try:
-            from paper_trade.hk_tracker import execute_signals as hk_execute, get_portfolio_summary as hk_summary
-            trade_results = hk_execute(
+            from paper_trade.hk_tracker import compare_signals as hk_compare, get_portfolio_summary as hk_summary, update_prices as hk_update_prices
+            hk_update_prices(prices)
+            trade_results   = hk_compare(
                 signals=gated_signals,
-                scores=composite_scores,
+                composite_scores=composite_scores,
                 prices=prices,
-                weights=portfolio_weights if portfolio_weights else None,
-                regime=regime_info.get("sub_state", "bull_caution"),
-                max_possible=9,
+                portfolio_weights=portfolio_weights or None,
             )
             portfolio_summary = hk_summary(prices=prices)
             summary["trades"] = trade_results
-            logger.info("[hk] Virtual trades: %d orders", len(trade_results))
+            logger.info("[hk] Signal actions: %d", len(trade_results))
         except Exception as e:
             logger.error("[hk] HK tracker failed: %s", e)
             summary["errors"].append(f"HK tracker failed: {e}")

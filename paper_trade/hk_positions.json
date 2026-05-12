@@ -1,0 +1,50 @@
+{
+  "_note": "Futu actual HK positions. Update manually or via hk_tracker.py.",
+  "updated": "2026-05-12",
+  "account": {
+    "cash": 0,
+    "broker": "Futu"
+  },
+  "positions": [
+    {
+      "symbol": "01250",
+      "shares": 4000,
+      "current_price": 1.52,
+      "avg_cost": 4.50,
+      "in_strategy": false,
+      "note": "山高新能源 — 非策略持仓，亏损 -66%，考虑止损"
+    },
+    {
+      "symbol": "03690",
+      "shares": 10,
+      "current_price": 84.15,
+      "avg_cost": null,
+      "in_strategy": true,
+      "note": "美团-W — 策略标的，成本未知"
+    },
+    {
+      "symbol": "00700",
+      "shares": 101,
+      "current_price": 457.20,
+      "avg_cost": 584.896,
+      "in_strategy": true,
+      "note": "腾讯控股 — 策略标的，亏损 -21.8%"
+    },
+    {
+      "symbol": "09618",
+      "shares": 104,
+      "current_price": 118.40,
+      "avg_cost": 344.173,
+      "in_strategy": true,
+      "note": "京东集团-SW — 策略标的，亏损 -65.6%"
+    },
+    {
+      "symbol": "09988",
+      "shares": 1500,
+      "current_price": 133.30,
+      "avg_cost": 136.80,
+      "in_strategy": true,
+      "note": "阿里巴巴-W — 策略标的，亏损 -2.6%"
+    }
+  ]
+}
