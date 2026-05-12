@@ -2,19 +2,11 @@
   "_note": "Robinhood actual positions. Update manually or via rh_tracker.py update command.",
   "updated": "2026-05-12",
   "account": {
-    "cash": 3945.09,
+    "cash": 7125.02,
     "cash_yield_pct": 3.35,
     "broker": "Robinhood"
   },
   "positions": [
-    {
-      "symbol": "QS",
-      "shares": 400,
-      "current_price": 8.03,
-      "avg_cost": 51.50,
-      "in_strategy": false,
-      "note": "Non-strategy position — bought @ $51.5, loss -84%. Consider tax-loss harvest."
-    },
     {
       "symbol": "QQQ",
       "shares": 35,
