@@ -48,13 +48,6 @@ jobs:
               print('ERRORS:', result['errors'])
               exit(1)
           "
-      - name: Commit updated portfolio state
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add paper_trade/rh_positions.json
-          git diff --cached --quiet || git commit -m "chore: auto-update US portfolio prices [skip ci]"
-          git push
 
   hk-pipeline:
     name: HK Market Pipeline
@@ -86,13 +79,6 @@ jobs:
               print('ERRORS:', result['errors'])
               exit(1)
           "
-      - name: Commit updated portfolio state
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add paper_trade/hk_positions.json
-          git diff --cached --quiet || git commit -m "chore: auto-update HK portfolio prices [skip ci]"
-          git push
 
   cn-pipeline:
     name: CN Market Pipeline
