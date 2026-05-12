@@ -12,15 +12,15 @@
       "current_price": 1.52,
       "avg_cost": 4.50,
       "in_strategy": false,
-      "note": "山高新能源 — 非策略持仓，亏损 -66%，考虑止损"
+      "note": "山高新能源 — 非策略持仓，主题投资（新能源），亏损 -66%，考虑止损"
     },
     {
       "symbol": "03690",
       "shares": 10,
       "current_price": 84.15,
-      "avg_cost": null,
+      "avg_cost": 0,
       "in_strategy": true,
-      "note": "美团-W — 策略标的，成本未知"
+      "note": "美团-W — 策略标的，赠股成本为零，全部为纯利润"
     },
     {
       "symbol": "00700",
