@@ -199,6 +199,49 @@ def execute_signals(
             except Exception as e:
                 logger.error("Exit error for %s: %s", symbol, e)
 
+    # ── 1.5. Rebalance trim — right-size positions that exceed their target ──
+    #
+    # Matches live behavior to the backtested graduated-sizing logic:
+    # if a held position's current portfolio weight > its target weight
+    # (derived from today's composite score via portfolio_weights), trim
+    # the excess.  This frees capital for stronger new signals.
+    #
+    # Only acts on symbols that have a current target weight in `weights`.
+    # Symbols in the neutral hold-zone (no target this session) are left alone.
+    #
+    # Constants
+    REBALANCE_TOLERANCE = 0.05   # trim only if current > target by >5pp
+    REBALANCE_MIN_USD   = 300    # minimum notional per trim order
+    estimated_freed     = 0.0
+
+    if weights and portfolio_value > 0:
+        for sym, pos_info in list(positions.items()):
+            target_w  = weights.get(sym)
+            if target_w is None:
+                continue   # neutral zone or no signal today — leave as-is
+            current_w = pos_info.get("market_value", 0.0) / portfolio_value
+            excess_w  = current_w - target_w
+            if excess_w > REBALANCE_TOLERANCE:
+                trim_usd = round(excess_w * portfolio_value, 2)
+                if trim_usd >= REBALANCE_MIN_USD:
+                    logger.info(
+                        "Rebalance trim %s: held=%.1f%% target=%.1f%% "
+                        "excess=%.1f%% → sell $%.0f",
+                        sym, current_w*100, target_w*100, excess_w*100, trim_usd,
+                    )
+                    order = place_market_order(sym, "sell", notional=trim_usd)
+                    if order:
+                        estimated_freed += trim_usd
+                        results.append({
+                            **order,
+                            "action":     "rebalance_trim",
+                            "held_pct":   round(current_w * 100, 1),
+                            "target_pct": round(target_w  * 100, 1),
+                            "trim_usd":   trim_usd,
+                        })
+        if estimated_freed > 0:
+            logger.info("Rebalance freed ~$%.0f; refreshing budget.", estimated_freed)
+
     # ── 2. Entries ────────────────────────────────────────────────────────
     new_buys = [sym for sym, sig in signals.items() if sig == 1 and sym not in positions]
     if not new_buys:
