@@ -19,7 +19,7 @@
       "symbol": "QQQ",
       "shares": 35,
       "current_price": 709.61,
-      "avg_cost": null,
+      "avg_cost": 659.27,
       "in_strategy": true,
       "note": "35 shares — need 65 more for Covered Call"
     },
@@ -27,7 +27,7 @@
       "symbol": "AAPL",
       "shares": 65,
       "current_price": 292.91,
-      "avg_cost": null,
+      "avg_cost": 269.69,
       "in_strategy": true,
       "note": "65 shares — need 35 more for Covered Call"
     },
@@ -35,7 +35,7 @@
       "symbol": "DIA",
       "shares": 47,
       "current_price": 497.00,
-      "avg_cost": null,
+      "avg_cost": 492.20,
       "in_strategy": true,
       "note": "道指ETF — 47 shares, need 53 more for Covered Call"
     },
@@ -43,7 +43,7 @@
       "symbol": "AMD",
       "shares": 20,
       "current_price": 449.50,
-      "avg_cost": null,
+      "avg_cost": 325.60,
       "in_strategy": true,
       "note": "AMD Tier B — 20 shares, need 80 more for Covered Call"
     },
