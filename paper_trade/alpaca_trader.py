@@ -214,7 +214,8 @@ def execute_signals(
     REBALANCE_MIN_USD   = 300    # minimum notional per trim order
     estimated_freed     = 0.0
 
-    if weights and portfolio_value > 0:
+    cash_for_trim = account.get("cash", 0.0)
+    if weights and portfolio_value > 0 and cash_for_trim >= 0:
         for sym, pos_info in list(positions.items()):
             target_w  = weights.get(sym)
             if target_w is None:
