@@ -36,16 +36,16 @@
       "shares": 47,
       "current_price": 497.00,
       "avg_cost": null,
-      "in_strategy": false,
-      "note": "Non-strategy position — no signals generated"
+      "in_strategy": true,
+      "note": "道指ETF — 47 shares, need 53 more for Covered Call"
     },
     {
       "symbol": "AMD",
       "shares": 20,
       "current_price": 449.50,
       "avg_cost": null,
-      "in_strategy": false,
-      "note": "Non-strategy position — no signals generated"
+      "in_strategy": true,
+      "note": "AMD Tier B — 20 shares, need 80 more for Covered Call"
     },
     {
       "symbol": "SOXL",
