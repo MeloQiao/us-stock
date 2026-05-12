@@ -204,14 +204,29 @@ def execute_signals(
     if not new_buys:
         return results
 
-    budget = min(portfolio_value, buying_power)
+    # Budget = available cash only (never use margin / portfolio value).
+    # Alpaca paper accounts are margin accounts by default, so buying_power
+    # can be 2-4× cash. We deliberately cap to actual cash to avoid
+    # accumulating negative cash balance over multiple trading days.
+    cash = account.get("cash", 0.0)
+    if cash < 100:
+        logger.warning(
+            "Insufficient cash (%.2f) for new buys — skipping %d symbols: %s",
+            cash, len(new_buys), new_buys,
+        )
+        return results
 
-    # Determine per-symbol notional
+    # Hard cap: never spend more than available cash on new entries this session
+    budget = min(cash, buying_power)
+
+    # Determine per-symbol notional.
+    # KEY FIX: weights are fractions of portfolio_value — use portfolio_value
+    # as the base, NOT budget. This preserves the intended allocation ratios
+    # regardless of how many symbols are new vs already held.
+    # Then scale down proportionally if total notional exceeds available cash.
     if weights:
-        # Use pre-computed optimizer weights (only for symbols in new_buys)
-        # Renormalize to the subset that are actual new buys
         sub_w = {s: weights[s] for s in new_buys if s in weights}
-        # Log symbols with BUY signal that were filtered out by portfolio optimizer
+        # Log symbols filtered by portfolio optimizer (corr dedup / sector cap)
         filtered_out = [s for s in new_buys if s not in sub_w]
         for s in filtered_out:
             logger.info(
@@ -221,13 +236,23 @@ def execute_signals(
             results.append({"symbol": s, "action": "filtered",
                              "reason": "portfolio_optimizer"})
         if not sub_w:
+            # fallback: equal weight across new buys, capped to budget
             sub_w = {s: 1 / len(new_buys) for s in new_buys}
-            filtered_out = []
-        total_w = sum(sub_w.values())
-        notionals = {s: budget * (sub_w[s] / total_w) for s in sub_w}
-        new_buys = list(sub_w.keys())  # only attempt orders for non-filtered symbols
+
+        # Target notional = weight × portfolio_value (preserves intended ratio)
+        notionals = {s: portfolio_value * w for s, w in sub_w.items()}
+        total_target = sum(notionals.values())
+        if total_target > budget:
+            # Scale down proportionally so total spend ≤ available cash
+            scale = budget / total_target
+            notionals = {s: n * scale for s, n in notionals.items()}
+            logger.info(
+                "Budget cap applied (target=%.0f > cash=%.0f): scaled ×%.2f",
+                total_target, budget, scale,
+            )
+        new_buys = list(sub_w.keys())
     elif scores:
-        raw = {s: max(scores.get(s, 1), 1) for s in new_buys}
+        raw    = {s: max(scores.get(s, 1), 1) for s in new_buys}
         total_w = sum(raw.values())
         notionals = {s: budget * (raw[s] / total_w) for s in new_buys}
     else:
