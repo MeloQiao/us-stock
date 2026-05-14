@@ -2,7 +2,7 @@
   "_note": "Futu actual HK positions. Update manually or via hk_tracker.py.",
   "updated": "2026-05-12",
   "account": {
-    "cash": 219543.68,
+    "cash": 219974.68,
     "broker": "Futu"
   },
   "positions": [
@@ -28,7 +28,7 @@
       "current_price": 457.20,
       "avg_cost": 584.896,
       "in_strategy": true,
-      "note": "腾讯控股 — 策略标的，亏损 -21.8%"
+      "note": "腾讯控股 — 策略标的，亏损 -21.8%。Covered Call 已成交：1张×100股，行权价待确认，6月到期，权利金$4.31/股，收HK$431"
     },
     {
       "symbol": "09618",
