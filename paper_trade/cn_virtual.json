@@ -1,9 +1,9 @@
 {
   "_note": "A-stock virtual portfolio. Auto-managed by cn_tracker.py via daily signals.",
-  "updated": "2026-05-14",
+  "updated": "2026-05-15",
   "capital": 1000000,
   "currency": "CNY",
-  "cash": 566666.65,
+  "cash": 350000.23,
   "positions": [
     {
       "symbol": "510300",
@@ -20,6 +20,15 @@
       "entry_price": 1.8650000095367432,
       "shares": 116175.16,
       "notional": 216666.67,
+      "score": 6.5,
+      "currency": "CNY"
+    },
+    {
+      "symbol": "000333",
+      "entry_date": "2026-05-15",
+      "entry_price": 81.80999755859375,
+      "shares": 2648.41,
+      "notional": 216666.42,
       "score": 6.5,
       "currency": "CNY"
     }
@@ -42,6 +51,16 @@
       "entry_price": 1.8650000095367432,
       "shares": 116175.16,
       "notional": 216666.67,
+      "score": 6.5,
+      "currency": "CNY"
+    },
+    {
+      "date": "2026-05-15",
+      "symbol": "000333",
+      "action": "buy",
+      "entry_price": 81.80999755859375,
+      "shares": 2648.41,
+      "notional": 216666.42,
       "score": 6.5,
       "currency": "CNY"
     }
