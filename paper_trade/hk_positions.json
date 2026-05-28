@@ -5,6 +5,18 @@
     "cash": 219975.68,
     "broker": "Futu"
   },
+  "covered_calls": [
+    {
+      "symbol": "00700",
+      "contracts": 1,
+      "shares_per_contract": 100,
+      "strike": 510,
+      "expiry": "2026-06-29",
+      "premium_received": 4.32,
+      "total_received": 432,
+      "note": "腾讯 Jun $510 Call — 1张×100股，已收HK$432权利金"
+    }
+  ],
   "positions": [
     {
       "symbol": "01250",

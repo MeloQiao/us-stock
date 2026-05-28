@@ -284,6 +284,10 @@ def _build_signal_card(
                 f"| 🔴 卖出 | {display} | {currency_sym}{price:,.2f} | {shares:.0f} | "
                 f"{currency_sym}{price*shares:,.0f} | {pnl_pct:+.1f}% |"
             )
+            # Covered call warning: must buy back the call before selling shares
+            cc_warn = t.get("covered_call_warning")
+            if cc_warn:
+                rows.append(f"| ⚠️ 期权 | {cc_warn} | | | | |")
         # Real position ENTER alerts
         for t in cp_enter:
             sym = t["symbol"]

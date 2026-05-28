@@ -164,6 +164,10 @@ def compare_signals(
     prices: dict[str, float],
     portfolio_weights: Optional[dict[str, float]] = None,
 ) -> list[dict]:
+    data      = load()
+    # Build covered_calls lookup: symbol → cc info
+    covered_calls = {cc["symbol"]: cc for cc in data.get("covered_calls", [])}
+
     positions = {p["symbol"]: p for p in get_positions()}
     actions   = []
 
@@ -175,14 +179,23 @@ def compare_signals(
         price = prices.get(sym, pos["current_price"])
 
         if sig == -1:
+            # Check if there's an open covered call on this symbol
+            cc = covered_calls.get(sym)
+            cc_warning = None
+            if cc:
+                cc_warning = (
+                    f"⚠️ 先买回 {sym} {cc['expiry']} ${cc['strike']} Call"
+                    f"（{cc['contracts']}张×{cc['shares_per_contract']}股），再卖股票！"
+                )
             actions.append({
-                "symbol":  sym,
-                "action":  "EXIT",
-                "reason":  f"score={score:.1f} → sell signal",
-                "shares":  pos["qty"],
-                "price":   price,
-                "pnl_pct": pos["unrealized_plpc"],
-                "urgency": "🔴 SELL NOW",
+                "symbol":               sym,
+                "action":               "EXIT",
+                "reason":               f"score={score:.1f} → sell signal",
+                "shares":               pos["qty"],
+                "price":                price,
+                "pnl_pct":              pos["unrealized_plpc"],
+                "urgency":              "🔴 SELL NOW",
+                "covered_call_warning": cc_warning,
             })
         elif sig == 1:
             w         = (portfolio_weights or {}).get(sym, 0)
