@@ -237,14 +237,21 @@ def _build_signal_card(
             "text": {"tag": "lark_md", "content": "**📋 次日开盘纸交易挂单**"},
         })
 
+        # Virtual portfolio actions (cn_tracker)
         buy_orders     = [t for t in trades if t.get("action") in ("enter_long", "buy")]
-        exit_orders    = [t for t in trades if t.get("action") == "exit"]
-        sell_orders    = [t for t in trades if t.get("action") == "sell"]
+        exit_orders    = [t for t in trades if t.get("action") in ("exit", "sell")]
         filtered_orders= [t for t in trades if t.get("action") == "filtered"]
+        # Real position actions (rh_tracker / hk_tracker compare_signals)
+        cp_exit   = [t for t in trades if t.get("action") == "EXIT"]
+        cp_enter  = [t for t in trades if t.get("action") == "ENTER"]
+        cp_trim   = [t for t in trades if t.get("action") == "TRIM"]
+        cp_hold   = [t for t in trades if t.get("action") == "HOLD"]
 
         currency_sym = "¥" if market == "cn" else ("HK$" if market == "hk" else "$")
         rows = ["| 方向 | 标的 | 参考价 | 估算股数 | 金额 | 评分 |",
                 "|------|------|--------|---------|------|------|"]
+
+        # Virtual buy orders
         for t in buy_orders:
             notional = t.get("notional") or 0
             score = t.get("score", "—")
@@ -256,15 +263,60 @@ def _build_signal_card(
             price_str = f"{currency_sym}{ref_price:,.2f}" if ref_price else "—"
             shares_str = str(est_shares) if est_shares else "—"
             rows.append(f"| 🟢 买入 | {display} | {price_str} | {shares_str} | {currency_sym}{notional:,.0f} | {score} |")
-        for t in (exit_orders + sell_orders):
+        # Virtual exit orders
+        for t in exit_orders:
             sym = t["symbol"]
             name = SYMBOL_NAMES.get(sym, "")
             display = f"{sym} {name}" if name else sym
             pnl = t.get("pnl")
             pnl_str = f"{currency_sym}{pnl:+,.0f}" if pnl is not None else "—"
             rows.append(f"| 🔴 平仓 | {display} | — | — | {pnl_str} | — |")
-        if not buy_orders and not exit_orders and not sell_orders:
+
+        # Real position EXIT alerts (compare_signals)
+        for t in cp_exit:
+            sym = t["symbol"]
+            name = SYMBOL_NAMES.get(sym, "")
+            display = f"{sym} {name}" if name else sym
+            price = t.get("price", 0)
+            shares = t.get("shares", 0)
+            pnl_pct = t.get("pnl_pct", 0)
+            rows.append(
+                f"| 🔴 卖出 | {display} | {currency_sym}{price:,.2f} | {shares:.0f} | "
+                f"{currency_sym}{price*shares:,.0f} | {pnl_pct:+.1f}% |"
+            )
+        # Real position ENTER alerts
+        for t in cp_enter:
+            sym = t["symbol"]
+            name = SYMBOL_NAMES.get(sym, "")
+            display = f"{sym} {name}" if name else sym
+            price = t.get("price", 0)
+            notional = t.get("notional", 0)
+            score = t.get("composite_score", t.get("score", "—"))
+            rows.append(
+                f"| 🟢 买入 | {display} | {currency_sym}{price:,.2f} | — | "
+                f"{currency_sym}{notional:,.0f} | {score} |"
+            )
+        # Real position TRIM alerts
+        for t in cp_trim:
+            sym = t["symbol"]
+            name = SYMBOL_NAMES.get(sym, "")
+            display = f"{sym} {name}" if name else sym
+            trim_amt = t.get("trim_usd") or t.get("trim_hkd", 0)
+            rows.append(f"| 🟡 减仓 | {display} | — | — | {currency_sym}{trim_amt:,.0f} | — |")
+
+        has_any = buy_orders or exit_orders or cp_exit or cp_enter or cp_trim
+        if not has_any:
             rows.append("| — | 无新挂单 | — | — | — | — |")
+
+        # HOLD summary (compact, not per-row)
+        if cp_hold:
+            hold_names = []
+            for t in cp_hold:
+                sym = t["symbol"]
+                name = SYMBOL_NAMES.get(sym, sym)
+                pnl = t.get("pnl_pct", 0)
+                hold_names.append(f"{sym}({pnl:+.1f}%)")
+            rows.append(f"| 🟢 持有 | {' / '.join(hold_names)} | — | — | — | — |")
 
         elements.append({
             "tag": "div",
