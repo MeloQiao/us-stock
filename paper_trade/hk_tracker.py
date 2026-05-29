@@ -222,22 +222,41 @@ def compare_signals(
                     "urgency": "🟢 HOLD",
                 })
 
+    # Check new entries (signal=1, not yet holding)
+    # First pass: collect targets with non-zero notional
+    enter_targets = []
+    acct = get_account()
     for sym, sig in signals.items():
         if sym in positions or sig != 1:
             continue
-        score    = composite_scores.get(sym, 0)
-        price    = prices.get(sym, 0)
-        w        = (portfolio_weights or {}).get(sym, 0)
-        acct     = get_account()
-        notional = w * acct["portfolio_value"] if w else 0
-        actions.append({
-            "symbol":   sym,
-            "action":   "ENTER",
-            "reason":   f"score={score:.1f} buy signal",
-            "notional": round(notional, 0),
-            "price":    price,
-            "urgency":  "🟢 BUY",
-        })
+        score  = composite_scores.get(sym, 0)
+        price  = prices.get(sym, 0)
+        w      = (portfolio_weights or {}).get(sym, 0)
+        target = w * acct["portfolio_value"] if w else 0
+        if target <= 0:
+            continue   # skip HK$0 targets entirely
+        enter_targets.append({"symbol": sym, "score": score,
+                               "price": price, "target": target})
+
+    # Second pass: scale down to available cash, filter tiny amounts
+    if enter_targets:
+        available    = max(acct["cash"], 0)
+        total_target = sum(t["target"] for t in enter_targets)
+        scale        = min(1.0, available / total_target) if total_target > 0 else 0
+        MIN_TRADE    = 200   # below HK$200 not worth showing
+
+        for t in enter_targets:
+            notional = round(t["target"] * scale, 0)
+            if notional < MIN_TRADE:
+                continue
+            actions.append({
+                "symbol":   t["symbol"],
+                "action":   "ENTER",
+                "reason":   f"score={t['score']:.1f} buy signal",
+                "notional": notional,
+                "price":    t["price"],
+                "urgency":  "🟢 BUY",
+            })
 
     return actions
 
