@@ -559,7 +559,7 @@ def run_daily_pipeline(market: Market = "us") -> dict:
             ok = send_signal_alert(
                 FEISHU_WEBHOOK_URL, signal_list,
                 vix_value=vix_value,
-                trades=trade_results if trade_results else None,
+                trades=trade_results,
                 portfolio_summary=portfolio_summary if portfolio_summary else None,
                 market=market,
                 regime_info=regime_info,
