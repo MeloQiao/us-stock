@@ -1,9 +1,9 @@
 {
   "_note": "A-stock virtual portfolio. Auto-managed by cn_tracker.py via daily signals.",
-  "updated": "2026-08-04",
+  "updated": "2026-08-05",
   "capital": 1000000,
   "currency": "CNY",
-  "cash": 297215.454526181,
+  "cash": 0.9745261810021475,
   "positions": [
     {
       "symbol": "588000",
@@ -39,6 +39,24 @@
       "shares": 2829.52,
       "notional": 104663.95,
       "score": 6.5,
+      "currency": "CNY"
+    },
+    {
+      "symbol": "688111",
+      "entry_date": "2026-08-05",
+      "entry_price": 274.45001220703125,
+      "shares": 445.93,
+      "notional": 122385.49,
+      "score": 8.5,
+      "currency": "CNY"
+    },
+    {
+      "symbol": "600036",
+      "entry_date": "2026-08-05",
+      "entry_price": 39.279998779296875,
+      "shares": 4450.84,
+      "notional": 174828.99,
+      "score": 8.5,
       "currency": "CNY"
     }
   ],
@@ -150,6 +168,26 @@
       "pnl": -20570.96,
       "pnl_pct": -17.63,
       "score": -6.5,
+      "currency": "CNY"
+    },
+    {
+      "date": "2026-08-05",
+      "symbol": "688111",
+      "action": "buy",
+      "entry_price": 274.45001220703125,
+      "shares": 445.93,
+      "notional": 122385.49,
+      "score": 8.5,
+      "currency": "CNY"
+    },
+    {
+      "date": "2026-08-05",
+      "symbol": "600036",
+      "action": "buy",
+      "entry_price": 39.279998779296875,
+      "shares": 4450.84,
+      "notional": 174828.99,
+      "score": 8.5,
       "currency": "CNY"
     }
   ]
